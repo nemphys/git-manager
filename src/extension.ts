@@ -1,7 +1,7 @@
 // The module 'vscode' contains the VS Code extensibility API
 // Import the module and reference it with the alias vscode in your code below
 import * as vscode from 'vscode';
-import { NativeTreeProvider, ChangelistTreeItem } from './nativeTreeProvider';
+import { NativeTreeProvider, ChangelistTreeItem, FileTreeItem } from './nativeTreeProvider';
 import { GitService } from './gitService';
 import { FileItem, FileStatus } from './types';
 import { CommitUI } from './commitUI';
@@ -34,8 +34,13 @@ export async function activate(context: vscode.ExtensionContext) {
     treeView = vscode.window.createTreeView('git-manager.changelists', {
       treeDataProvider: treeProvider,
       showCollapseAll: true,
-      canSelectMany: true,
+      canSelectMany: true, // Enable multi-selection for files
       dragAndDropController: treeProvider,
+    });
+
+    // Listen for selection changes to update status bar
+    treeView.onDidChangeSelection(() => {
+      updateAllCommitUI();
     });
 
     // Listen for tree data changes to update commit button context
@@ -74,12 +79,6 @@ export async function activate(context: vscode.ExtensionContext) {
       isExpanded = anyExpanded;
     });
 
-    // Handle checkbox state changes
-    treeView.onDidChangeCheckboxState((e) => {
-      treeProvider.onDidChangeCheckboxState(e);
-      updateAllCommitUI();
-      updateCommitButtonContext();
-    });
 
     // Removed force expand wiring
 
@@ -120,11 +119,10 @@ export async function activate(context: vscode.ExtensionContext) {
     // Commit webview removed; commit via title button/status bar/command palette
   }
 
-  // Function to update commit button context based on file selection
+  // Function to update commit button context (no longer needed but kept for compatibility)
   function updateCommitButtonContext() {
-    const selectedFiles = treeProvider.getSelectedFiles();
-    const hasSelectedFiles = selectedFiles.length > 0;
-    vscode.commands.executeCommand('setContext', 'git-manager.hasSelectedFiles', hasSelectedFiles);
+    // Context is no longer used since we removed checkbox selection
+    vscode.commands.executeCommand('setContext', 'git-manager.hasSelectedFiles', false);
   }
 
   // Register commands
@@ -321,8 +319,10 @@ export async function activate(context: vscode.ExtensionContext) {
       });
 
       if (name) {
-        treeProvider.createChangelist(name.trim());
-        treeProvider.refresh();
+        await treeProvider.createChangelist(name.trim());
+        // The createChangelist method already fires the tree data change event
+        // Force a microtask delay to ensure VS Code processes the update
+        await new Promise(resolve => setImmediate(resolve));
         updateAllCommitUI();
       }
     }),
@@ -363,8 +363,10 @@ export async function activate(context: vscode.ExtensionContext) {
       );
 
       if (confirm === 'Delete') {
-        treeProvider.deleteChangelist(changelistId);
-        treeProvider.refresh();
+        await treeProvider.deleteChangelist(changelistId);
+        // The deleteChangelist method already fires the tree data change event
+        // Force a microtask delay to ensure VS Code processes the update
+        await new Promise(resolve => setImmediate(resolve));
         updateAllCommitUI();
       }
     }),
@@ -417,7 +419,9 @@ export async function activate(context: vscode.ExtensionContext) {
         try {
           await treeProvider.renameChangelist(changelistId, newName.trim());
           vscode.window.showInformationMessage(`Changelist renamed to "${newName.trim()}"`);
-          treeProvider.refresh();
+          // The renameChangelist method already fires the tree data change event
+          // Force a microtask delay to ensure VS Code processes the update
+          await new Promise(resolve => setImmediate(resolve));
         } catch (error) {
           vscode.window.showErrorMessage(`Failed to rename changelist: ${error}`);
         }
@@ -458,17 +462,36 @@ export async function activate(context: vscode.ExtensionContext) {
         await treeProvider.setActiveChangelist(changelistId);
         const changelist = treeProvider.getChangelists().find((c) => c.id === changelistId);
         vscode.window.showInformationMessage(`Active changelist set to "${changelist?.name || changelistId}"`);
-        treeProvider.refresh();
+        // The setActiveChangelist method already fires the tree data change event
+        // Force a microtask delay to ensure VS Code processes the update
+        await new Promise(resolve => setImmediate(resolve));
       } catch (error) {
         vscode.window.showErrorMessage(`Failed to set active changelist: ${error}`);
       }
     }),
 
-    vscode.commands.registerCommand('git-manager.commitSelectedFiles', async () => {
-      const selectedFiles = treeProvider.getSelectedFiles();
+    // Commit changelist - commits all files in a changelist (only for active changelist)
+    vscode.commands.registerCommand('git-manager.commitChangelist', async (changelistItem?: any) => {
+      let changelistId: string;
 
-      if (selectedFiles.length === 0) {
-        vscode.window.showWarningMessage('No files selected for commit. Please select files first.');
+      if (changelistItem && changelistItem.changelist) {
+        // Called from context menu - changelistItem is a ChangelistTreeItem
+        changelistId = changelistItem.changelist.id;
+      } else {
+        vscode.window.showWarningMessage('This command must be invoked from a changelist context menu.');
+        return;
+      }
+
+      // Verify this is the active changelist
+      const activeChangelistId = treeProvider.getActiveChangelistId();
+      if (changelistId !== activeChangelistId) {
+        vscode.window.showWarningMessage('Commit is only available for the active changelist. Please set this changelist as active first.');
+        return;
+      }
+
+      const files = treeProvider.getFilesFromChangelist(changelistId);
+      if (files.length === 0) {
+        vscode.window.showWarningMessage('No files in this changelist to commit.');
         return;
       }
 
@@ -496,10 +519,10 @@ export async function activate(context: vscode.ExtensionContext) {
         if (!choice) {
           return;
         }
-        const success = await gitService.commitFiles(selectedFiles, message.trim(), { amend: choice.amend });
+        const success = await gitService.commitFiles(files, message.trim(), { amend: choice.amend });
 
         if (success) {
-          vscode.window.showInformationMessage(`Successfully committed ${selectedFiles.length} file(s)`);
+          vscode.window.showInformationMessage(`Successfully committed ${files.length} file(s)`);
           if (choice.push) {
             const pushed = await gitService.pushCurrentBranch();
             if (pushed) {
@@ -508,18 +531,101 @@ export async function activate(context: vscode.ExtensionContext) {
           }
           treeProvider.refresh();
           updateAllCommitUI();
-          updateCommitButtonContext();
         } else {
           vscode.window.showErrorMessage('Failed to commit files. Check the output panel for details.');
         }
       }
     }),
 
-    vscode.commands.registerCommand('git-manager.stashSelectedFiles', async () => {
-      const selectedFiles = treeProvider.getSelectedFiles();
+    // Commit files - commits selected/highlighted files from the tree view (only files in active changelist)
+    vscode.commands.registerCommand('git-manager.commitFiles', async () => {
+      // Get selected items from the tree view
+      const selectedItems = treeView.selection;
+      if (selectedItems.length === 0) {
+        vscode.window.showWarningMessage('No files selected. Please select files from the tree view first.');
+        return;
+      }
 
+      // Extract FileItem objects from selected tree items
+      const allFiles = treeProvider.getFilesFromTreeItems(selectedItems);
+      if (allFiles.length === 0) {
+        vscode.window.showWarningMessage('No files selected for commit. Please select file items from the tree view.');
+        return;
+      }
+
+      // Filter to only files in the active changelist
+      const activeChangelistId = treeProvider.getActiveChangelistId();
+      const files = allFiles.filter((file) => file.changelistId === activeChangelistId);
+      
+      if (files.length === 0) {
+        vscode.window.showWarningMessage('No files from the active changelist selected. Please select files from the active changelist.');
+        return;
+      }
+
+      if (files.length < allFiles.length) {
+        vscode.window.showInformationMessage(`Only committing ${files.length} file(s) from the active changelist. ${allFiles.length - files.length} file(s) were ignored.`);
+      }
+
+      const message = await vscode.window.showInputBox({
+        prompt: 'Enter commit message',
+        placeHolder: 'Describe your changes...',
+        validateInput: (value) => {
+          if (!value || value.trim().length === 0) {
+            return 'Commit message cannot be empty';
+          }
+          return null;
+        },
+      });
+
+      if (message) {
+        const choice = await vscode.window.showQuickPick(
+          [
+            { label: 'Commit', amend: false, push: false },
+            { label: 'Amend Commit', amend: true, push: false },
+            { label: 'Commit and Push', amend: false, push: true },
+            { label: 'Amend Commit and Push', amend: true, push: true },
+          ],
+          { placeHolder: 'Choose commit action' }
+        );
+        if (!choice) {
+          return;
+        }
+        const success = await gitService.commitFiles(files, message.trim(), { amend: choice.amend });
+
+        if (success) {
+          vscode.window.showInformationMessage(`Successfully committed ${files.length} file(s)`);
+          if (choice.push) {
+            const pushed = await gitService.pushCurrentBranch();
+            if (pushed) {
+              vscode.window.showInformationMessage('Pushed to remote successfully');
+            }
+          }
+          treeProvider.refresh();
+          updateAllCommitUI();
+        } else {
+          vscode.window.showErrorMessage('Failed to commit files. Check the output panel for details.');
+        }
+      }
+    }),
+
+    // Keep old command for backward compatibility but it now uses tree selection
+    vscode.commands.registerCommand('git-manager.commitSelectedFiles', async () => {
+      // Redirect to the new commitFiles command
+      await vscode.commands.executeCommand('git-manager.commitFiles');
+    }),
+
+    vscode.commands.registerCommand('git-manager.stashSelectedFiles', async () => {
+      // Get selected items from the tree view
+      const selectedItems = treeView.selection;
+      if (selectedItems.length === 0) {
+        vscode.window.showWarningMessage('No files selected. Please select files from the tree view first.');
+        return;
+      }
+
+      // Extract FileItem objects from selected tree items
+      const selectedFiles = treeProvider.getFilesFromTreeItems(selectedItems);
       if (selectedFiles.length === 0) {
-        vscode.window.showWarningMessage('No files selected for stash. Please select files first.');
+        vscode.window.showWarningMessage('No files selected for stash. Please select file items from the tree view.');
         return;
       }
 
@@ -556,7 +662,6 @@ export async function activate(context: vscode.ExtensionContext) {
           vscode.window.showInformationMessage(`Successfully stashed ${selectedFiles.length} file(s)`);
           treeProvider.refresh();
           updateAllCommitUI();
-          updateCommitButtonContext();
         } else {
           vscode.window.showErrorMessage('Failed to stash files. Check the output panel for details.');
         }
@@ -574,12 +679,13 @@ export async function activate(context: vscode.ExtensionContext) {
           filesToMove = [file];
         }
       } else {
-        // Otherwise, move selected files
-        filesToMove = treeProvider.getSelectedFiles();
+        // Otherwise, use selected files from tree view
+        const selectedItems = treeView.selection;
+        filesToMove = treeProvider.getFilesFromTreeItems(selectedItems);
       }
 
       if (filesToMove.length === 0) {
-        vscode.window.showWarningMessage('No files selected. Please select files first.');
+        vscode.window.showWarningMessage('No files selected. Please select files from the tree view first.');
         return;
       }
 
@@ -596,15 +702,7 @@ export async function activate(context: vscode.ExtensionContext) {
         }
         treeProvider.refresh();
         updateAllCommitUI();
-        updateCommitButtonContext();
       }
-    }),
-
-    vscode.commands.registerCommand('git-manager.toggleFileSelection', (fileId: string) => {
-      treeProvider.toggleFileSelection(fileId);
-      treeProvider.refresh();
-      updateAllCommitUI();
-      updateCommitButtonContext();
     }),
 
     vscode.commands.registerCommand('git-manager.refresh', () => {
@@ -622,10 +720,17 @@ export async function activate(context: vscode.ExtensionContext) {
     }),
 
     vscode.commands.registerCommand('git-manager.revertSelectedFiles', async () => {
-      const selectedFiles = treeProvider.getSelectedFiles();
+      // Get selected items from the tree view
+      const selectedItems = treeView.selection;
+      if (selectedItems.length === 0) {
+        vscode.window.showWarningMessage('No files selected. Please select files from the tree view first.');
+        return;
+      }
 
+      // Extract FileItem objects from selected tree items
+      const selectedFiles = treeProvider.getFilesFromTreeItems(selectedItems);
       if (selectedFiles.length === 0) {
-        vscode.window.showWarningMessage('No files selected for revert. Please select files first.');
+        vscode.window.showWarningMessage('No files selected for revert. Please select file items from the tree view.');
         return;
       }
 
@@ -642,7 +747,6 @@ export async function activate(context: vscode.ExtensionContext) {
           vscode.window.showInformationMessage(`Successfully reverted ${selectedFiles.length} file(s)`);
           treeProvider.refresh();
           updateAllCommitUI();
-          updateCommitButtonContext();
         } else {
           vscode.window.showErrorMessage('Failed to revert files. Check the output panel for details.');
         }
@@ -804,27 +908,33 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     }),
 
-    vscode.commands.registerCommand('git-manager.selectAllFiles', () => {
-      treeProvider.selectAllFiles();
-      treeProvider.refresh();
-      updateAllCommitUI();
-      updateCommitButtonContext();
-    }),
-
-    vscode.commands.registerCommand('git-manager.deselectAllFiles', () => {
-      treeProvider.deselectAllFiles();
-      treeProvider.refresh();
-      updateAllCommitUI();
-      updateCommitButtonContext();
-    }),
-
-    // New command for status bar commit button
+    // New command for status bar commit button (only commits files from active changelist)
     vscode.commands.registerCommand('git-manager.commitFromStatusBar', async () => {
-      const selectedFiles = treeProvider.getSelectedFiles();
-
-      if (selectedFiles.length === 0) {
-        vscode.window.showWarningMessage('No files selected for commit. Please select files first.');
+      // Get selected items from the tree view
+      const selectedItems = treeView.selection;
+      if (selectedItems.length === 0) {
+        vscode.window.showWarningMessage('No files selected. Please select files from the tree view first.');
         return;
+      }
+
+      // Extract FileItem objects from selected tree items
+      const allFiles = treeProvider.getFilesFromTreeItems(selectedItems);
+      if (allFiles.length === 0) {
+        vscode.window.showWarningMessage('No files selected for commit. Please select file items from the tree view.');
+        return;
+      }
+
+      // Filter to only files in the active changelist
+      const activeChangelistId = treeProvider.getActiveChangelistId();
+      const selectedFiles = allFiles.filter((file) => file.changelistId === activeChangelistId);
+      
+      if (selectedFiles.length === 0) {
+        vscode.window.showWarningMessage('No files from the active changelist selected. Please select files from the active changelist.');
+        return;
+      }
+
+      if (selectedFiles.length < allFiles.length) {
+        vscode.window.showInformationMessage(`Only committing ${selectedFiles.length} file(s) from the active changelist. ${allFiles.length - selectedFiles.length} file(s) were ignored.`);
       }
 
       // Get commit message from the input field
@@ -865,7 +975,6 @@ export async function activate(context: vscode.ExtensionContext) {
           }
           treeProvider.refresh();
           updateAllCommitUI();
-          updateCommitButtonContext();
           // Clear the commit message input
           commitMessageInput.text = '📝 ';
         } else {
@@ -874,13 +983,33 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     }),
 
-    // New command for status bar stash button
+    // New command for status bar stash button (only stashes files from active changelist)
     vscode.commands.registerCommand('git-manager.stashFromStatusBar', async () => {
-      const selectedFiles = treeProvider.getSelectedFiles();
-
-      if (selectedFiles.length === 0) {
-        vscode.window.showWarningMessage('No files selected for stash. Please select files first.');
+      // Get selected items from the tree view
+      const selectedItems = treeView.selection;
+      if (selectedItems.length === 0) {
+        vscode.window.showWarningMessage('No files selected. Please select files from the tree view first.');
         return;
+      }
+
+      // Extract FileItem objects from selected tree items
+      const allFiles = treeProvider.getFilesFromTreeItems(selectedItems);
+      if (allFiles.length === 0) {
+        vscode.window.showWarningMessage('No files selected for stash. Please select file items from the tree view.');
+        return;
+      }
+
+      // Filter to only files in the active changelist
+      const activeChangelistId = treeProvider.getActiveChangelistId();
+      const selectedFiles = allFiles.filter((file) => file.changelistId === activeChangelistId);
+      
+      if (selectedFiles.length === 0) {
+        vscode.window.showWarningMessage('No files from the active changelist selected. Please select files from the active changelist.');
+        return;
+      }
+
+      if (selectedFiles.length < allFiles.length) {
+        vscode.window.showInformationMessage(`Only stashing ${selectedFiles.length} file(s) from the active changelist. ${allFiles.length - selectedFiles.length} file(s) were ignored.`);
       }
 
       // Determine default message based on changelist selection
@@ -917,7 +1046,6 @@ export async function activate(context: vscode.ExtensionContext) {
           vscode.window.showInformationMessage(`Successfully stashed ${selectedFiles.length} file(s)`);
           treeProvider.refresh();
           updateAllCommitUI();
-          updateCommitButtonContext();
           // Clear the commit message input
           commitMessageInput.text = '📝 ';
         } else {
@@ -1078,11 +1206,13 @@ function createCommitStatusBarItems() {
 }
 
 function updateCommitStatusBar() {
-  if (!treeProvider) {
+  if (!treeProvider || !treeView) {
     return;
   }
 
-  const selectedFiles = treeProvider.getSelectedFiles();
+  // Get selected items from tree view
+  const selectedItems = treeView.selection;
+  const selectedFiles = treeProvider.getFilesFromTreeItems(selectedItems);
   const totalFiles = treeProvider.getAllFiles().length;
 
   if (selectedFiles.length > 0) {

@@ -30,45 +30,24 @@ export class ChangelistTreeItem extends vscode.TreeItem {
       // Add "(active)" suffix to indicate active status
       this.label = `${changelist.name} (active)`;
     }
-
-    // Add checkbox support for changelist selection
-    this.updateCheckboxState();
-  }
-
-  updateCheckboxState(): void {
-    this.checkboxState = this.getChangelistCheckboxState();
-  }
-
-  private getChangelistCheckboxState(): vscode.TreeItemCheckboxState {
-    if (this.changelist.files.length === 0) {
-      return vscode.TreeItemCheckboxState.Unchecked;
-    }
-
-    const selectedFiles = this.changelist.files.filter((file) => file.isSelected);
-    const totalFiles = this.changelist.files.length;
-
-    if (selectedFiles.length === 0) {
-      return vscode.TreeItemCheckboxState.Unchecked;
-    } else if (selectedFiles.length === totalFiles) {
-      return vscode.TreeItemCheckboxState.Checked;
-    } else {
-      // For partial selection, we'll use unchecked since VS Code doesn't have a partial state
-      return vscode.TreeItemCheckboxState.Unchecked;
-    }
   }
 }
 
 export class FileTreeItem extends vscode.TreeItem {
-  constructor(public readonly file: FileItem, public readonly workspaceRoot: string, public readonly changelistId?: string) {
+  constructor(public readonly file: FileItem, public readonly workspaceRoot: string, public readonly changelistId?: string, public readonly isActive: boolean = false) {
     super(file.name, vscode.TreeItemCollapsibleState.None);
     this.tooltip = file.path;
     this.description = file.path; // Show relative project path instead of status
     // Use different context values:
-    // - stagedFile: file in changelist and staged (green)
-    // - unstagedFile: file in changelist but unstaged (red)
+    // - stagedFile/stagedFileActive: file in changelist and staged (green)
+    // - unstagedFile/unstagedFileActive: file in changelist but unstaged (red)
     // - file: file in unversioned section
     if (changelistId) {
-      this.contextValue = file.isStaged ? 'stagedFile' : 'unstagedFile';
+      if (isActive) {
+        this.contextValue = file.isStaged ? 'stagedFileActive' : 'unstagedFileActive';
+      } else {
+        this.contextValue = file.isStaged ? 'stagedFile' : 'unstagedFile';
+      }
     } else {
       this.contextValue = 'file';
     }
@@ -77,9 +56,6 @@ export class FileTreeItem extends vscode.TreeItem {
     // Resolve the file path relative to workspace root
     const fullPath = path.join(workspaceRoot, file.path);
     this.resourceUri = vscode.Uri.file(fullPath);
-
-    // Add checkbox behavior - use checkboxState for native checkboxes
-    this.checkboxState = file.isSelected ? vscode.TreeItemCheckboxState.Checked : vscode.TreeItemCheckboxState.Unchecked;
 
     // Add command to open diff on click
     this.command = {
@@ -96,31 +72,6 @@ export class UnversionedSectionTreeItem extends vscode.TreeItem {
     this.contextValue = 'unversionedSection';
     this.iconPath = undefined; // Remove prefix icon from unversioned files section
     this.description = `${unversionedFiles.length} files`;
-
-    // Add checkbox support for unversioned files section
-    this.updateCheckboxState();
-  }
-
-  updateCheckboxState(): void {
-    this.checkboxState = this.getUnversionedCheckboxState();
-  }
-
-  private getUnversionedCheckboxState(): vscode.TreeItemCheckboxState {
-    if (this.unversionedFiles.length === 0) {
-      return vscode.TreeItemCheckboxState.Unchecked;
-    }
-
-    const selectedFiles = this.unversionedFiles.filter((file) => file.isSelected);
-    const totalFiles = this.unversionedFiles.length;
-
-    if (selectedFiles.length === 0) {
-      return vscode.TreeItemCheckboxState.Unchecked;
-    } else if (selectedFiles.length === totalFiles) {
-      return vscode.TreeItemCheckboxState.Checked;
-    } else {
-      // For partial selection, we'll use unchecked since VS Code doesn't have a partial state
-      return vscode.TreeItemCheckboxState.Unchecked;
-    }
   }
 }
 
@@ -318,7 +269,8 @@ export class NativeTreeProvider
     this.isRefreshing = true;
     try {
       await this.loadGitStatus();
-      this._onDidChangeTreeData.fire();
+      // Fire with undefined to force full tree refresh and invalidate all cached items
+      this._onDidChangeTreeData.fire(undefined);
     } finally {
       this.isRefreshing = false;
     }
@@ -335,8 +287,8 @@ export class NativeTreeProvider
     // Also collapse unversioned files section
     this.unversionedFilesExpanded = false;
 
-    // Fire tree data change to refresh the view with collapsed state
-    this._onDidChangeTreeData.fire();
+    // Fire tree data change with undefined to force full tree refresh
+    this._onDidChangeTreeData.fire(undefined);
   }
 
   private async loadGitStatus(): Promise<void> {
@@ -602,33 +554,18 @@ export class NativeTreeProvider
 
     if (element instanceof ChangelistTreeItem) {
       // Return files in this changelist
-      return element.changelist.files.map((file) => new FileTreeItem(file, this.workspaceRoot, element.changelist.id));
+      const isActive = element.changelist.id === this.activeChangelistId;
+      return element.changelist.files.map((file) => new FileTreeItem(file, this.workspaceRoot, element.changelist.id, isActive));
     }
 
     if (element instanceof UnversionedSectionTreeItem) {
-      // Return unversioned files
+      // Return unversioned files (not in any changelist, so not active)
       return this.unversionedFiles.map((file) => new FileTreeItem(file, this.workspaceRoot));
     }
 
     return [];
   }
 
-  // Handle checkbox state changes
-  async onDidChangeCheckboxState(event: vscode.TreeCheckboxChangeEvent<vscode.TreeItem>): Promise<void> {
-    for (const [item, checkboxState] of event.items) {
-      if (item instanceof FileTreeItem) {
-        const isChecked = checkboxState === vscode.TreeItemCheckboxState.Checked;
-        this.toggleFileSelection(item.file.id, isChecked);
-      } else if (item instanceof ChangelistTreeItem) {
-        const isChecked = checkboxState === vscode.TreeItemCheckboxState.Checked;
-        this.toggleChangelistSelection(item.changelist.id, isChecked);
-      } else if (item instanceof UnversionedSectionTreeItem) {
-        const isChecked = checkboxState === vscode.TreeItemCheckboxState.Checked;
-        this.toggleUnversionedSelection(isChecked);
-      }
-    }
-    this._onDidChangeTreeData.fire();
-  }
 
   async createChangelist(name: string): Promise<void> {
     const newChangelist: Changelist = {
@@ -644,8 +581,21 @@ export class NativeTreeProvider
     // Emit event that a new changelist was created
     this._onChangelistCreated.fire(newChangelist.id);
 
-    // Fire tree data change to update UI immediately
-    this._onDidChangeTreeData.fire();
+    // Persist changelists first to ensure state is saved
+    await this.saveChangelists();
+
+    // Fire tree data change with undefined to force full tree refresh
+    // Use setImmediate to ensure the event fires after the current execution context
+    this._onDidChangeTreeData.fire(undefined);
+    if (typeof setImmediate !== 'undefined') {
+      setImmediate(() => {
+        this._onDidChangeTreeData.fire(undefined);
+      });
+    } else {
+      setTimeout(() => {
+        this._onDidChangeTreeData.fire(undefined);
+      }, 0);
+    }
 
     // Persist changelists asynchronously (non-blocking)
     this.saveChangelistsAsync();
@@ -674,8 +624,22 @@ export class NativeTreeProvider
 
     this.changelists = this.changelists.filter((c) => c.id !== changelistId);
     
-    // Fire tree data change to update UI immediately
-    this._onDidChangeTreeData.fire();
+    // Persist changelists first to ensure state is saved
+    await this.saveChangelists();
+    
+    // Fire tree data change with undefined to force full tree refresh
+    // This is needed because deleting a changelist affects the root level and may change active status
+    // Use setImmediate to ensure the event fires after the current execution context
+    this._onDidChangeTreeData.fire(undefined);
+    if (typeof setImmediate !== 'undefined') {
+      setImmediate(() => {
+        this._onDidChangeTreeData.fire(undefined);
+      });
+    } else {
+      setTimeout(() => {
+        this._onDidChangeTreeData.fire(undefined);
+      }, 0);
+    }
 
     // Persist changelists asynchronously (non-blocking)
     this.saveChangelistsAsync();
@@ -695,11 +659,21 @@ export class NativeTreeProvider
 
     changelist.name = newName;
     
-    // Fire tree data change to update UI immediately
-    this._onDidChangeTreeData.fire();
-
-    // Persist changelists asynchronously (non-blocking)
-    this.saveChangelistsAsync();
+    // Persist changelists first to ensure state is saved
+    await this.saveChangelists();
+    
+    // Fire tree data change with undefined to force full tree refresh and invalidate all cached items
+    // Use setImmediate to ensure the event fires after the current execution context
+    this._onDidChangeTreeData.fire(undefined);
+    if (typeof setImmediate !== 'undefined') {
+      setImmediate(() => {
+        this._onDidChangeTreeData.fire(undefined);
+      });
+    } else {
+      setTimeout(() => {
+        this._onDidChangeTreeData.fire(undefined);
+      }, 0);
+    }
   }
 
   async setActiveChangelist(changelistId: string): Promise<void> {
@@ -710,11 +684,22 @@ export class NativeTreeProvider
 
     this.activeChangelistId = changelistId;
     
-    // Fire tree data change to update UI immediately
-    this._onDidChangeTreeData.fire();
-
-    // Persist changelists asynchronously (non-blocking)
-    this.saveChangelistsAsync();
+    // Persist changelists first to ensure state is saved
+    await this.saveChangelists();
+    
+    // Fire tree data change with undefined to force full tree refresh and invalidate all cached items
+    // This ensures all tree items are recreated with updated context values (active/inactive)
+    // Use setImmediate to ensure the event fires after the current execution context
+    this._onDidChangeTreeData.fire(undefined);
+    if (typeof setImmediate !== 'undefined') {
+      setImmediate(() => {
+        this._onDidChangeTreeData.fire(undefined);
+      });
+    } else {
+      setTimeout(() => {
+        this._onDidChangeTreeData.fire(undefined);
+      }, 0);
+    }
   }
 
   getActiveChangelistId(): string | undefined {
@@ -925,84 +910,26 @@ export class NativeTreeProvider
   }
 
   getSelectedFiles(): FileItem[] {
-    const selectedFiles: FileItem[] = [];
-
-    for (const changelist of this.changelists) {
-      selectedFiles.push(...changelist.files.filter((f) => f.isSelected));
-    }
-
-    selectedFiles.push(...this.unversionedFiles.filter((f) => f.isSelected));
-
-    return selectedFiles;
+    // This method is kept for backward compatibility but is no longer used
+    // File selection is now handled via VS Code's native tree selection
+    return [];
   }
 
-  toggleFileSelection(fileId: string, isSelected?: boolean): void {
-    // Check in changelists
-    for (const changelist of this.changelists) {
-      const file = changelist.files.find((f) => f.id === fileId);
-      if (file) {
-        file.isSelected = isSelected !== undefined ? isSelected : !file.isSelected;
-        return;
+  getFilesFromChangelist(changelistId: string): FileItem[] {
+    const changelist = this.changelists.find((c) => c.id === changelistId);
+    return changelist ? [...changelist.files] : [];
+  }
+
+  getFilesFromTreeItems(treeItems: readonly vscode.TreeItem[]): FileItem[] {
+    const files: FileItem[] = [];
+    for (const item of treeItems) {
+      if (item instanceof FileTreeItem) {
+        files.push(item.file);
       }
     }
-
-    // Check in unversioned files
-    const file = this.unversionedFiles.find((f) => f.id === fileId);
-    if (file) {
-      file.isSelected = isSelected !== undefined ? isSelected : !file.isSelected;
-    }
+    return files;
   }
 
-  toggleChangelistSelection(changelistId: string, isSelected: boolean): void {
-    const changelist = this.changelists.find((c) => c.id === changelistId);
-    if (changelist) {
-      // Select/deselect all files in the changelist
-      changelist.files.forEach((file) => {
-        file.isSelected = isSelected;
-      });
-
-      // Trigger tree refresh to update checkbox states
-      this._onDidChangeTreeData.fire();
-    }
-  }
-
-  toggleUnversionedSelection(isSelected: boolean): void {
-    // Select/deselect all unversioned files
-    this.unversionedFiles.forEach((file) => {
-      file.isSelected = isSelected;
-    });
-
-    // Trigger tree refresh to update checkbox states
-    this._onDidChangeTreeData.fire();
-  }
-
-  selectAllFiles(): void {
-    this.changelists.forEach((changelist) => {
-      changelist.files.forEach((file) => {
-        file.isSelected = true;
-      });
-    });
-
-    this.unversionedFiles.forEach((file) => {
-      file.isSelected = true;
-    });
-
-    this._onDidChangeTreeData.fire();
-  }
-
-  deselectAllFiles(): void {
-    this.changelists.forEach((changelist) => {
-      changelist.files.forEach((file) => {
-        file.isSelected = false;
-      });
-    });
-
-    this.unversionedFiles.forEach((file) => {
-      file.isSelected = false;
-    });
-
-    this._onDidChangeTreeData.fire();
-  }
 
   getChangelists(): Changelist[] {
     return this.changelists;

@@ -33,12 +33,11 @@
     "onCommand:git-manager.createChangelist",
     "onCommand:git-manager.deleteChangelist",
     "onCommand:git-manager.commitSelectedFiles",
+    "onCommand:git-manager.commitChangelist",
+    "onCommand:git-manager.commitFiles",
     "onCommand:git-manager.collapseAll",
     "onCommand:git-manager.moveFileToChangelist",
-    "onCommand:git-manager.toggleFileSelection",
     "onCommand:git-manager.refresh",
-    "onCommand:git-manager.selectAllFiles",
-    "onCommand:git-manager.deselectAllFiles",
     "onCommand:git-manager.commitFromStatusBar",
     "onCommand:git-manager.stashFromStatusBar",
     "onCommand:git-manager.updateCommitMessage",
@@ -88,6 +87,18 @@
         "tooltip": "Select files to commit"
       },
       {
+        "command": "git-manager.commitChangelist",
+        "title": "Commit Changelist",
+        "category": "JetBrains Commit Manager",
+        "icon": "$(check)"
+      },
+      {
+        "command": "git-manager.commitFiles",
+        "title": "Commit Files",
+        "category": "JetBrains Commit Manager",
+        "icon": "$(check)"
+      },
+      {
         "command": "git-manager.collapseAll",
         "title": "Collapse All",
         "category": "JetBrains Commit Manager",
@@ -99,25 +110,10 @@
         "category": "JetBrains Commit Manager"
       },
       {
-        "command": "git-manager.toggleFileSelection",
-        "title": "Toggle File Selection",
-        "category": "JetBrains Commit Manager"
-      },
-      {
         "command": "git-manager.refresh",
         "title": "Refresh",
         "category": "JetBrains Commit Manager",
         "icon": "$(sync)"
-      },
-      {
-        "command": "git-manager.selectAllFiles",
-        "title": "Select All Files",
-        "category": "JetBrains Commit Manager"
-      },
-      {
-        "command": "git-manager.deselectAllFiles",
-        "title": "Deselect All Files",
-        "category": "JetBrains Commit Manager"
       },
       {
         "command": "git-manager.commitFromStatusBar",
@@ -222,8 +218,8 @@
     "menus": {
       "view/title": [
         {
-          "command": "git-manager.commitSelectedFiles",
-          "when": "view == git-manager.changelists && git-manager.hasSelectedFiles",
+          "command": "git-manager.commitFiles",
+          "when": "view == git-manager.changelists",
           "group": "navigation@1"
         },
         {
@@ -254,13 +250,23 @@
       ],
       "view/item/context": [
         {
+          "command": "git-manager.commitChangelist",
+          "when": "view == git-manager.changelists && (viewItem == changelistNonEmptyActive || viewItem == defaultChangelistNonEmptyActive)",
+          "group": "1_commit"
+        },
+        {
+          "command": "git-manager.commitFiles",
+          "when": "view == git-manager.changelists && (viewItem == stagedFileActive || viewItem == unstagedFileActive)",
+          "group": "1_commit"
+        },
+        {
           "command": "git-manager.revertChangelist",
-          "when": "view == git-manager.changelists && (viewItem == changelistNonEmpty || viewItem == defaultChangelistNonEmpty)",
+          "when": "view == git-manager.changelists && (viewItem == changelistNonEmpty || viewItem == defaultChangelistNonEmpty || viewItem == changelistNonEmptyActive || viewItem == defaultChangelistNonEmptyActive)",
           "group": "2_modification"
         },
         {
           "command": "git-manager.renameChangelist",
-          "when": "view == git-manager.changelists && viewItem == changelist",
+          "when": "view == git-manager.changelists && (viewItem == changelist || viewItem == changelistActive || viewItem == defaultChangelist || viewItem == defaultChangelistActive || viewItem == changelistNonEmpty || viewItem == changelistNonEmptyActive || viewItem == defaultChangelistNonEmpty || viewItem == defaultChangelistNonEmptyActive)",
           "group": "1_modification"
         },
         {
@@ -270,27 +276,27 @@
         },
         {
           "command": "git-manager.deleteChangelist",
-          "when": "view == git-manager.changelists && viewItem == changelist && viewItem != defaultChangelist",
+          "when": "view == git-manager.changelists && (viewItem == changelist || viewItem == changelistActive) && viewItem != defaultChangelist && viewItem != defaultChangelistActive",
           "group": "2_modification"
         },
         {
           "command": "git-manager.revertFile",
-          "when": "view == git-manager.changelists && (viewItem == file || viewItem == stagedFile || viewItem == unstagedFile)",
+          "when": "view == git-manager.changelists && (viewItem == file || viewItem == stagedFile || viewItem == unstagedFile || viewItem == stagedFileActive || viewItem == unstagedFileActive)",
           "group": "2_modification"
         },
         {
           "command": "git-manager.unstageFile",
-          "when": "view == git-manager.changelists && viewItem == stagedFile",
+          "when": "view == git-manager.changelists && (viewItem == stagedFile || viewItem == stagedFileActive)",
           "group": "1_modification"
         },
         {
           "command": "git-manager.untrackFile",
-          "when": "view == git-manager.changelists && (viewItem == stagedFile || viewItem == unstagedFile)",
+          "when": "view == git-manager.changelists && (viewItem == stagedFile || viewItem == unstagedFile || viewItem == stagedFileActive || viewItem == unstagedFileActive)",
           "group": "1_modification"
         },
         {
           "command": "git-manager.openFile",
-          "when": "view == git-manager.changelists && (viewItem == file || viewItem == stagedFile || viewItem == unstagedFile)",
+          "when": "view == git-manager.changelists && (viewItem == file || viewItem == stagedFile || viewItem == unstagedFile || viewItem == stagedFileActive || viewItem == unstagedFileActive)",
           "group": "navigation@2"
         }
       ]
