@@ -413,6 +413,7 @@ export class NativeTreeProvider
             if (targetChangelist) {
               file.changelistId = targetChangelist.id;
               targetChangelist.files.push(file);
+              this.sortChangelistFiles(targetChangelist);
               addedFileIds.add(file.id);
             }
           } else {
@@ -421,6 +422,7 @@ export class NativeTreeProvider
             if (defaultChangelist) {
               file.changelistId = defaultChangelist.id;
               defaultChangelist.files.push(file);
+              this.sortChangelistFiles(defaultChangelist);
               addedFileIds.add(file.id);
             }
           }
@@ -464,6 +466,11 @@ export class NativeTreeProvider
       );
 
       this.unversionedFiles = unversionedFilesList;
+
+      // Sort all changelists after loading
+      for (const changelist of this.changelists) {
+        this.sortChangelistFiles(changelist);
+      }
     } catch (error) {
       console.error('Error loading Git status:', error);
     }
@@ -591,6 +598,7 @@ export class NativeTreeProvider
     const defaultChangelist = this.changelists.find((c) => c.isDefault);
     if (defaultChangelist && changelist.files.length > 0) {
       defaultChangelist.files.push(...changelist.files);
+      this.sortChangelistFiles(defaultChangelist);
     }
 
     this.changelists = this.changelists.filter((c) => c.id !== changelistId);
@@ -642,6 +650,7 @@ export class NativeTreeProvider
 
     // Add files to target changelist
     targetChangelist.files.push(...filesToMove);
+    this.sortChangelistFiles(targetChangelist);
 
     // Auto-expand the target changelist to show the moved files
     targetChangelist.isExpanded = true;
@@ -699,6 +708,7 @@ export class NativeTreeProvider
 
         file.changelistId = targetChangelistId;
         targetChangelist.files.push(file);
+        this.sortChangelistFiles(targetChangelist);
 
         // Track this move to prevent it from being overwritten by immediate refreshes
         this.recentMoves.set(file.path, {
@@ -967,6 +977,13 @@ export class NativeTreeProvider
 
   private generateId(): string {
     return Date.now().toString(36) + Math.random().toString(36).substr(2);
+  }
+
+  private sortChangelistFiles(changelist: Changelist): void {
+    changelist.files.sort((a, b) => {
+      // Sort by file name (case-insensitive)
+      return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+    });
   }
 
   // Drag and drop implementation

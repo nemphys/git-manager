@@ -89,6 +89,7 @@ export class WebviewCommitManager {
       const defaultChangelist = this.changelists.find((c) => c.isDefault);
       if (defaultChangelist) {
         defaultChangelist.files = gitFiles;
+        this.sortChangelistFiles(defaultChangelist);
       }
 
       this.unversionedFiles = unversionedFiles;
@@ -119,6 +120,7 @@ export class WebviewCommitManager {
     const defaultChangelist = this.changelists.find((c) => c.isDefault);
     if (defaultChangelist && changelist.files.length > 0) {
       defaultChangelist.files.push(...changelist.files);
+      this.sortChangelistFiles(defaultChangelist);
     }
 
     this.changelists = this.changelists.filter((c) => c.id !== changelistId);
@@ -158,6 +160,7 @@ export class WebviewCommitManager {
         if (targetChangelist) {
           file.changelistId = targetChangelistId;
           targetChangelist.files.push(file);
+          this.sortChangelistFiles(targetChangelist);
         }
       }
     }
@@ -902,5 +905,12 @@ export class WebviewCommitManager {
 
   private generateId(): string {
     return Date.now().toString(36) + Math.random().toString(36).substr(2);
+  }
+
+  private sortChangelistFiles(changelist: Changelist): void {
+    changelist.files.sort((a, b) => {
+      // Sort by file name (case-insensitive)
+      return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+    });
   }
 }
