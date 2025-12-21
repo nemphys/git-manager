@@ -133,9 +133,14 @@ export class NativeTreeProvider
   private unversionedFilesExpanded: boolean = true; // Track unversioned files section expansion
   private gitService: GitService;
   private workspaceRoot: string;
+  private context: vscode.ExtensionContext;
+  private isRefreshing: boolean = false;
+  private recentMoves: Map<string, { target: 'changelist' | 'unversioned'; changelistId?: string; timestamp: number }> = new Map(); // Track recent file moves to prevent overwriting
+  private lastMoveTime: number = 0; // Track when last move happened to debounce refreshes
 
-  constructor(workspaceRoot: string) {
+  constructor(workspaceRoot: string, context: vscode.ExtensionContext) {
     this.workspaceRoot = workspaceRoot;
+    this.context = context;
     this.gitService = new GitService(workspaceRoot);
     this.initializeDefaultChangelist();
   }
@@ -153,9 +158,107 @@ export class NativeTreeProvider
     this.changelists = [defaultChangelist];
   }
 
+  async loadPersistedChangelists(): Promise<void> {
+    try {
+      const persistedState = this.context.workspaceState.get<import('./types').PersistedState>('changelists');
+      
+      if (persistedState && persistedState.changelists && persistedState.changelists.length > 0) {
+        // Restore changelists from persisted state
+        this.changelists = persistedState.changelists.map((p) => ({
+          id: p.id,
+          name: p.name,
+          description: p.description,
+          files: [], // Files will be loaded from Git status
+          isDefault: p.isDefault,
+          isExpanded: p.isExpanded ?? false,
+          createdAt: new Date(p.createdAt),
+        }));
+
+        // Ensure default changelist exists
+        const hasDefault = this.changelists.some((c) => c.isDefault);
+        if (!hasDefault) {
+          this.initializeDefaultChangelist();
+        }
+      } else {
+        // No persisted state, initialize default
+        this.initializeDefaultChangelist();
+      }
+    } catch (error) {
+      console.error('Error loading persisted changelists:', error);
+      // Fallback to default if loading fails
+      this.initializeDefaultChangelist();
+    }
+  }
+
+  private async saveChangelists(): Promise<void> {
+    try {
+      // Build file assignments map (file path → changelist ID)
+      // Only include files that are actually in changelists
+      const fileAssignments: { [filePath: string]: string } = {};
+      for (const changelist of this.changelists) {
+        for (const file of changelist.files) {
+          fileAssignments[file.path] = changelist.id;
+        }
+      }
+      
+      // Note: Files in unversionedFiles are NOT included in fileAssignments,
+      // which means they won't be restored to changelists on next load
+
+      // Convert changelists to serializable format
+      const persistedChangelists = this.changelists.map((c) => ({
+        id: c.id,
+        name: c.name,
+        description: c.description,
+        isDefault: c.isDefault ?? false,
+        isExpanded: c.isExpanded,
+        createdAt: c.createdAt.toISOString(),
+      }));
+
+      const persistedState: import('./types').PersistedState = {
+        changelists: persistedChangelists,
+        fileAssignments,
+      };
+
+      await this.context.workspaceState.update('changelists', persistedState);
+    } catch (error) {
+      // Log error but don't throw - persistence failures shouldn't block UI updates
+      console.error('Error saving changelists:', error);
+    }
+  }
+
+  // Non-blocking version for fire-and-forget persistence
+  private saveChangelistsAsync(): void {
+    this.saveChangelists().catch((error) => {
+      console.error('Error in async saveChangelists:', error);
+    });
+  }
+
   async refresh(): Promise<void> {
-    await this.loadGitStatus();
-    this._onDidChangeTreeData.fire();
+    // Prevent concurrent refresh calls
+    if (this.isRefreshing) {
+      return;
+    }
+
+    // Debounce refreshes that happen immediately after a move (within 500ms)
+    // This prevents file watcher from overwriting manual moves
+    const timeSinceLastMove = Date.now() - this.lastMoveTime;
+    if (timeSinceLastMove < 500) {
+      // Delay the refresh slightly to allow the move to complete
+      setTimeout(() => {
+        this.refresh().catch((error) => {
+          console.error('Error in debounced refresh:', error);
+        });
+      }, 500 - timeSinceLastMove);
+      return;
+    }
+
+    this.isRefreshing = true;
+    try {
+      await this.loadGitStatus();
+      this._onDidChangeTreeData.fire();
+    } finally {
+      this.isRefreshing = false;
+    }
   }
 
   // Removed expand all functionality
@@ -181,6 +284,15 @@ export class NativeTreeProvider
       // Preserve selection states and changelist assignments for all changelists
       const selectionMap = new Map<string, boolean>();
       const changelistAssignmentMap = new Map<string, string>();
+      const filesToKeepInUnversioned = new Set<string>(); // Track files explicitly moved to unversioned
+
+      // Clean up old recent moves (older than 2 seconds)
+      const now = Date.now();
+      for (const [filePath, move] of this.recentMoves.entries()) {
+        if (now - move.timestamp > 2000) {
+          this.recentMoves.delete(filePath);
+        }
+      }
 
       // Collect all current selection states and changelist assignments
       for (const changelist of this.changelists) {
@@ -191,8 +303,57 @@ export class NativeTreeProvider
       }
 
       // Also collect selection states from unversioned files
+      // Track files that are explicitly in unversioned (changelistId is undefined)
       for (const file of this.unversionedFiles) {
         selectionMap.set(file.id, file.isSelected);
+        // If file has no changelistId, it was explicitly moved to unversioned
+        if (!file.changelistId) {
+          filesToKeepInUnversioned.add(file.path);
+        }
+      }
+
+      // Apply recent moves to assignment map (these take highest priority)
+      for (const [filePath, move] of this.recentMoves.entries()) {
+        const file = gitFiles.find((f) => f.path === filePath);
+        if (file) {
+          if (move.target === 'changelist' && move.changelistId) {
+            // File was recently moved to a changelist - override any other assignment
+            changelistAssignmentMap.set(file.id, move.changelistId);
+            filesToKeepInUnversioned.delete(filePath);
+          } else if (move.target === 'unversioned') {
+            // File was recently moved to unversioned - ensure it stays there
+            filesToKeepInUnversioned.add(filePath);
+            changelistAssignmentMap.delete(file.id);
+          }
+        }
+      }
+
+      // Load persisted file assignments if available (only as fallback for files not in current state)
+      // BUT: Don't use persisted assignments for files that are currently in unversioned
+      const persistedState = this.context.workspaceState.get<import('./types').PersistedState>('changelists');
+      if (persistedState && persistedState.fileAssignments) {
+        // Get set of files currently in unversioned (by path)
+        const unversionedFilePaths = new Set(this.unversionedFiles.map(f => f.path));
+        
+        // Merge persisted assignments only for files that don't have a current assignment
+        // AND are not currently in unversioned files
+        for (const [filePath, changelistId] of Object.entries(persistedState.fileAssignments)) {
+          // Skip if file is currently in unversioned - it should stay there
+          if (unversionedFilePaths.has(filePath)) {
+            continue;
+          }
+          
+          // Find the file by path in gitFiles
+          const file = gitFiles.find((f) => f.path === filePath);
+          if (file && !changelistAssignmentMap.has(file.id)) {
+            // Only use persisted assignment if file doesn't already have a current assignment
+            // Also verify the changelist still exists
+            const changelistExists = this.changelists.some((c) => c.id === changelistId);
+            if (changelistExists) {
+              changelistAssignmentMap.set(file.id, changelistId);
+            }
+          }
+        }
       }
 
       // Clear all changelists
@@ -200,8 +361,16 @@ export class NativeTreeProvider
         changelist.files = [];
       }
 
+      // Use Set to track added files and prevent duplicates
+      const addedFileIds = new Set<string>();
+
       // Distribute files to their assigned changelists
       gitFiles.forEach((file) => {
+        // Skip if already added (prevent duplicates)
+        if (addedFileIds.has(file.id)) {
+          return;
+        }
+
         // Restore selection state if it was previously selected
         if (selectionMap.has(file.id)) {
           file.isSelected = selectionMap.get(file.id)!;
@@ -209,6 +378,13 @@ export class NativeTreeProvider
 
         // Only add files that are already tracked by Git
         if (file.status !== FileStatus.UNTRACKED) {
+          // Check if file was explicitly moved to unversioned (should not be in changelist)
+          if (filesToKeepInUnversioned.has(file.path)) {
+            // Skip this file - it should remain in unversioned files
+            // It will be handled in the unversioned files section below
+            return;
+          }
+
           const assignedChangelistId = changelistAssignmentMap.get(file.id);
 
           if (assignedChangelistId) {
@@ -217,6 +393,7 @@ export class NativeTreeProvider
             if (targetChangelist) {
               file.changelistId = targetChangelist.id;
               targetChangelist.files.push(file);
+              addedFileIds.add(file.id);
             }
           } else {
             // New file - add to default changelist
@@ -224,18 +401,49 @@ export class NativeTreeProvider
             if (defaultChangelist) {
               file.changelistId = defaultChangelist.id;
               defaultChangelist.files.push(file);
+              addedFileIds.add(file.id);
             }
           }
         }
       });
 
       // Restore selection states for unversioned files
-      this.unversionedFiles = unversionedFiles.map((file) => {
-        if (selectionMap.has(file.id)) {
-          file.isSelected = selectionMap.get(file.id)!;
+      // Filter out any unversioned files that are already in changelists (by path matching)
+      const filesInChangelists = new Set<string>();
+      for (const changelist of this.changelists) {
+        for (const file of changelist.files) {
+          filesInChangelists.add(file.path);
         }
-        return file;
+      }
+
+      // Also include tracked files that were explicitly moved to unversioned
+      const unversionedFilesList: FileItem[] = [];
+      
+      // Add files from gitFiles that should be in unversioned (unstaged tracked files)
+      gitFiles.forEach((file) => {
+        if (filesToKeepInUnversioned.has(file.path) && !filesInChangelists.has(file.path)) {
+          // Restore selection state
+          if (selectionMap.has(file.id)) {
+            file.isSelected = selectionMap.get(file.id)!;
+          }
+          file.changelistId = undefined; // Ensure no changelist assignment
+          unversionedFilesList.push(file);
+        }
       });
+
+      // Add untracked files from Git
+      unversionedFilesList.push(
+        ...unversionedFiles
+          .filter((file) => !filesInChangelists.has(file.path) && !filesToKeepInUnversioned.has(file.path))
+          .map((file) => {
+            if (selectionMap.has(file.id)) {
+              file.isSelected = selectionMap.get(file.id)!;
+            }
+            return file;
+          })
+      );
+
+      this.unversionedFiles = unversionedFilesList;
     } catch (error) {
       console.error('Error loading Git status:', error);
     }
@@ -342,10 +550,15 @@ export class NativeTreeProvider
     };
 
     this.changelists.push(newChangelist);
-    this._onDidChangeTreeData.fire();
-
+    
     // Emit event that a new changelist was created
     this._onChangelistCreated.fire(newChangelist.id);
+
+    // Fire tree data change to update UI immediately
+    this._onDidChangeTreeData.fire();
+
+    // Persist changelists asynchronously (non-blocking)
+    this.saveChangelistsAsync();
   }
 
   async deleteChangelist(changelistId: string): Promise<void> {
@@ -361,7 +574,12 @@ export class NativeTreeProvider
     }
 
     this.changelists = this.changelists.filter((c) => c.id !== changelistId);
+    
+    // Fire tree data change to update UI immediately
     this._onDidChangeTreeData.fire();
+
+    // Persist changelists asynchronously (non-blocking)
+    this.saveChangelistsAsync();
   }
 
   async renameChangelist(changelistId: string, newName: string): Promise<void> {
@@ -377,7 +595,12 @@ export class NativeTreeProvider
     }
 
     changelist.name = newName;
+    
+    // Fire tree data change to update UI immediately
     this._onDidChangeTreeData.fire();
+
+    // Persist changelists asynchronously (non-blocking)
+    this.saveChangelistsAsync();
   }
 
   async moveChangelistFiles(sourceChangelistId: string, targetChangelistId: string): Promise<void> {
@@ -403,7 +626,11 @@ export class NativeTreeProvider
     // Auto-expand the target changelist to show the moved files
     targetChangelist.isExpanded = true;
 
+    // Fire tree data change to update UI immediately
     this._onDidChangeTreeData.fire();
+
+    // Persist changelists asynchronously (non-blocking)
+    this.saveChangelistsAsync();
   }
 
   async moveFileToChangelist(fileId: string, targetChangelistId: string): Promise<void> {
@@ -453,6 +680,13 @@ export class NativeTreeProvider
         file.changelistId = targetChangelistId;
         targetChangelist.files.push(file);
 
+        // Track this move to prevent it from being overwritten by immediate refreshes
+        this.recentMoves.set(file.path, {
+          target: 'changelist',
+          changelistId: targetChangelistId,
+          timestamp: Date.now(),
+        });
+
         // Auto-expand the target changelist to show the moved file
         targetChangelist.isExpanded = true;
 
@@ -461,7 +695,113 @@ export class NativeTreeProvider
       }
     }
 
-    this._onDidChangeTreeData.fire();
+    // Update last move time to debounce refreshes
+    this.lastMoveTime = Date.now();
+
+    // Persist changelists first to ensure state is saved
+    await this.saveChangelists();
+
+    // Fire tree data change to update UI
+    // Use undefined to refresh the entire tree
+    this._onDidChangeTreeData.fire(undefined);
+
+    // Fire again after a small delay to ensure UI updates even if a refresh was queued
+    setTimeout(() => {
+      this._onDidChangeTreeData.fire(undefined);
+    }, 50);
+
+    // Only refresh if we actually changed Git state (added untracked file)
+    // For moves between changelists, we don't need to refresh - just update UI state
+    if (wasUntracked && file) {
+      // Wait a bit for Git operation to complete, then refresh to sync with Git state
+      setTimeout(async () => {
+        try {
+          // Save first to ensure persisted state is current
+          await this.saveChangelists();
+          // Then refresh to sync with Git
+          await this.loadGitStatus();
+          this._onDidChangeTreeData.fire();
+        } catch (error) {
+          console.error('Error refreshing after moving untracked file:', error);
+        }
+      }, 300);
+    }
+  }
+
+  async moveFileToUnversioned(fileId: string): Promise<void> {
+    let sourceChangelist: Changelist | undefined;
+    let file: FileItem | undefined;
+
+    // Find the file in changelists
+    for (const changelist of this.changelists) {
+      const fileIndex = changelist.files.findIndex((f) => f.id === fileId);
+      if (fileIndex !== -1) {
+        sourceChangelist = changelist;
+        file = changelist.files[fileIndex];
+        changelist.files.splice(fileIndex, 1);
+        break;
+      }
+    }
+
+    if (!file) {
+      // File not found in any changelist
+      return;
+    }
+
+    // Unstage the file if it's tracked by Git
+    try {
+      const isTracked = await this.gitService.isFileTracked(file.path);
+      if (isTracked) {
+        await this.gitService.unstageFile(file.path);
+      }
+    } catch (error) {
+      console.error('Error unstaging file:', error);
+      // Continue even if unstaging fails
+    }
+
+    // Clear changelist assignment
+    file.changelistId = undefined;
+
+    // Track this move to prevent it from being overwritten by immediate refreshes
+    this.recentMoves.set(file.path, {
+      target: 'unversioned',
+      timestamp: Date.now(),
+    });
+
+    // Update last move time to debounce refreshes
+    this.lastMoveTime = Date.now();
+
+    // Add to unversioned files list
+    this.unversionedFiles.push(file);
+
+    // Persist changelists first to ensure state is saved
+    await this.saveChangelists();
+
+    // Fire tree data change to update UI
+    // Use undefined to refresh the entire tree
+    this._onDidChangeTreeData.fire(undefined);
+
+    // Fire again after a small delay to ensure UI updates even if a refresh was queued
+    setTimeout(() => {
+      this._onDidChangeTreeData.fire(undefined);
+    }, 50);
+
+    // Persist changelists asynchronously (non-blocking)
+    this.saveChangelistsAsync();
+
+    // Refresh after a delay to get updated Git status (this will update file status correctly)
+    // We delay to allow the Git unstage operation to complete and the UI to update first
+    setTimeout(async () => {
+      try {
+        // Save first to ensure persisted state is current
+        await this.saveChangelists();
+        // Then refresh to sync with Git
+        await this.loadGitStatus();
+        this._onDidChangeTreeData.fire();
+      } catch (error) {
+        console.error('Error refreshing after moving file to unversioned:', error);
+      }
+    }, 300);
   }
 
   getSelectedFiles(): FileItem[] {
@@ -644,6 +984,26 @@ export class NativeTreeProvider
     token: vscode.CancellationToken
   ): Promise<void> {
     if (!target) {
+      return;
+    }
+
+    // Check if dropping on unversioned files section
+    if (target instanceof UnversionedSectionTreeItem) {
+      // Handle file drops to unversioned section (unstaging)
+      const fileTransferItem = dataTransfer.get('application/vnd.code.tree.jetbrains-commit-manager');
+      if (fileTransferItem) {
+        try {
+          const fileIds = fileTransferItem.value as string[];
+          if (Array.isArray(fileIds)) {
+            // Move each file to unversioned (unstage them)
+            for (const fileId of fileIds) {
+              await this.moveFileToUnversioned(fileId);
+            }
+          }
+        } catch (error) {
+          console.error('Error handling file drop to unversioned:', error);
+        }
+      }
       return;
     }
 

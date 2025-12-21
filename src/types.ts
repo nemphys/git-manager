@@ -44,3 +44,18 @@ export interface CommitManagerState {
   selectedFiles: Set<string>;
   activeChangelistId?: string;
 }
+
+// Serializable format for persistence (Date objects converted to ISO strings)
+export interface PersistedChangelist {
+  id: string;
+  name: string;
+  description?: string;
+  isDefault: boolean;
+  isExpanded?: boolean;
+  createdAt: string; // ISO string instead of Date
+}
+
+export interface PersistedState {
+  changelists: PersistedChangelist[];
+  fileAssignments: { [filePath: string]: string }; // file path → changelist ID
+}

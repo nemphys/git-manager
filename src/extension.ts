@@ -14,15 +14,18 @@ let commitMessageInput: vscode.StatusBarItem;
 let isExpanded: boolean = false; // Track expand/collapse state
 let commitUI: CommitUI;
 
-export function activate(context: vscode.ExtensionContext) {
+export async function activate(context: vscode.ExtensionContext) {
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   if (!workspaceRoot) {
     vscode.window.showWarningMessage('No workspace folder found. Please open a folder to use the commit manager.');
   }
 
   if (workspaceRoot) {
-    treeProvider = new NativeTreeProvider(workspaceRoot);
+    treeProvider = new NativeTreeProvider(workspaceRoot, context);
     gitService = new GitService(workspaceRoot);
+
+    // Load persisted changelists before refreshing
+    await treeProvider.loadPersistedChangelists();
 
     // Create the tree view
     treeView = vscode.window.createTreeView('jetbrains-commit-manager.changelists', {
