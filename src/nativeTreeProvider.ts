@@ -1,10 +1,10 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { Changelist, FileItem, FileStatus } from './types';
+import { Changelist, FileItem, FileStatus, Hunk } from './types';
 import { GitService } from './gitService';
 
 export class ChangelistTreeItem extends vscode.TreeItem {
-  constructor(public readonly changelist: Changelist, public readonly collapsibleState: vscode.TreeItemCollapsibleState, public readonly isActive: boolean = false) {
+  constructor(public readonly changelist: Changelist, public readonly collapsibleState: vscode.TreeItemCollapsibleState, public readonly isActive: boolean = false, public readonly colorIndex?: number) {
     super(changelist.name, collapsibleState);
     this.tooltip = changelist.description || changelist.name;
     this.description = `${changelist.files.length} files`;
@@ -23,13 +23,58 @@ export class ChangelistTreeItem extends vscode.TreeItem {
         this.contextValue = changelist.files.length > 0 ? 'changelistNonEmpty' : 'changelist';
       }
     }
-    this.iconPath = undefined; // Remove prefix icons from changelists
+    
+    // Set colored icon based on changelist index
+    // All changelists get a color: default gets 'default', others get their index
+    const iconColorIndex = colorIndex !== undefined ? colorIndex : (changelist.isDefault ? 'default' : undefined);
+    if (iconColorIndex !== undefined) {
+      this.iconPath = this.createColoredIcon(iconColorIndex, isActive);
+    } else {
+      this.iconPath = undefined;
+    }
 
     // Display active changelist with a visual indicator (VS Code doesn't support bold text in tree items)
     if (isActive) {
       // Add "(active)" suffix to indicate active status
       this.label = `${changelist.name} (active)`;
     }
+  }
+
+  private createColoredIcon(colorIndex: number | 'default', isActive: boolean): vscode.Uri {
+    const colors = [
+      '#4CAF50', // green
+      '#2196F3', // blue
+      '#FF9800', // orange
+      '#9C27B0', // purple
+      '#F44336', // red
+      '#00BCD4', // cyan
+      '#FFEB3B', // yellow
+      '#795548', // brown
+    ];
+    
+    // Use gray for default changelist, otherwise use color from array
+    const color = colorIndex === 'default' ? '#9E9E9E' : colors[colorIndex % colors.length];
+    
+    // Create a small colored circle icon (filled for active, outlined for inactive)
+    let svg: string;
+    if (isActive) {
+      // Filled circle for active changelist
+      svg = `
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">
+          <circle cx="8" cy="8" r="6" fill="${color}" opacity="0.9"/>
+        </svg>
+      `;
+    } else {
+      // Hollow circle (outline) for non-active changelist
+      svg = `
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">
+          <circle cx="8" cy="8" r="6" fill="none" stroke="${color}" stroke-width="2" opacity="0.9"/>
+        </svg>
+      `;
+    }
+    
+    const encoded = Buffer.from(svg).toString('base64');
+    return vscode.Uri.parse(`data:image/svg+xml;base64,${encoded}`);
   }
 }
 
@@ -61,7 +106,7 @@ export class FileTreeItem extends vscode.TreeItem {
     this.command = {
       command: 'git-manager.openDiff',
       title: 'Open Diff',
-      arguments: [this.resourceUri, file.status],
+      arguments: [this.resourceUri, file.status, this.changelistId],
     };
   }
 }
@@ -107,11 +152,13 @@ export class NativeTreeProvider
   private unversionedFilesExpanded: boolean = true; // Track unversioned files section expansion
   private gitService: GitService;
   private workspaceRoot: string;
+  private previousHunksByFile: Map<string, Hunk[]> = new Map(); // Store previous hunks to detect extensions
   private context: vscode.ExtensionContext;
   private isRefreshing: boolean = false;
   private recentMoves: Map<string, { target: 'changelist' | 'unversioned'; changelistId?: string; timestamp: number }> = new Map(); // Track recent file moves to prevent overwriting
   private lastMoveTime: number = 0; // Track when last move happened to debounce refreshes
   private activeChangelistId: string | undefined; // ID of the currently active changelist
+  private hunkAssignments: Map<string, string> = new Map(); // hunkId -> changelistId
 
   constructor(workspaceRoot: string, context: vscode.ExtensionContext) {
     this.workspaceRoot = workspaceRoot;
@@ -126,6 +173,7 @@ export class NativeTreeProvider
       name: 'Changes',
       description: 'Default changelist',
       files: [],
+      hunks: [],
       isDefault: true,
       isExpanded: false, // Start collapsed to match VS Code's default behavior
       createdAt: new Date(),
@@ -148,6 +196,7 @@ export class NativeTreeProvider
           name: p.name,
           description: p.description,
           files: [], // Files will be loaded from Git status
+          hunks: [], // Hunks will be loaded from Git status
           isDefault: p.isDefault,
           isExpanded: p.isExpanded ?? false,
           createdAt: new Date(p.createdAt),
@@ -206,11 +255,24 @@ export class NativeTreeProvider
   private async saveChangelists(): Promise<void> {
     try {
       // Build file assignments map (file path → changelist ID)
-      // Only include files that are actually in changelists
+      // Only include files that are actually in changelists and have no hunks
       const fileAssignments: { [filePath: string]: string } = {};
       for (const changelist of this.changelists) {
         for (const file of changelist.files) {
-          fileAssignments[file.path] = changelist.id;
+          // Only save file-level assignments for files without hunks
+          if (!file.hunks || file.hunks.length === 0) {
+            fileAssignments[file.path] = changelist.id;
+          }
+        }
+      }
+      
+      // Build hunk assignments map (hunk ID → changelist ID)
+      const hunkAssignments: { [hunkId: string]: string } = {};
+      for (const changelist of this.changelists) {
+        for (const hunk of changelist.hunks) {
+          if (hunk.changelistId) {
+            hunkAssignments[hunk.id] = hunk.changelistId;
+          }
         }
       }
       
@@ -230,6 +292,7 @@ export class NativeTreeProvider
       const persistedState: import('./types').PersistedState = {
         changelists: persistedChangelists,
         fileAssignments,
+        hunkAssignments,
         activeChangelistId: this.activeChangelistId,
       };
 
@@ -327,6 +390,62 @@ export class NativeTreeProvider
         }
       }
 
+      // Load persisted hunk assignments
+      const persistedState = this.context.workspaceState.get<import('./types').PersistedState>('changelists');
+      this.hunkAssignments.clear();
+      if (persistedState && persistedState.hunkAssignments) {
+        for (const [hunkId, changelistId] of Object.entries(persistedState.hunkAssignments)) {
+          this.hunkAssignments.set(hunkId, changelistId);
+        }
+      }
+
+      // Parse hunks for all files and assign them to changelists
+      const fileHunksMap = new Map<string, Hunk[]>(); // filePath -> hunks
+      for (const file of gitFiles) {
+        if (file.status !== FileStatus.UNTRACKED && file.status !== FileStatus.DELETED) {
+          const unstagedHunks = await this.gitService.getFileHunks(file.path);
+          const stagedHunks = await this.gitService.getStagedHunks(file.path);
+          const allHunks = [...unstagedHunks, ...stagedHunks];
+          
+          // Get previous hunks for this file to detect extensions
+          const previousHunks = this.previousHunksByFile.get(file.path) || [];
+          
+          // Assign hunks to changelists
+          for (const hunk of allHunks) {
+            const assignedChangelistId = this.hunkAssignments.get(hunk.id);
+            if (assignedChangelistId) {
+              // Hunk already has an assignment (persisted or previously assigned)
+              hunk.changelistId = assignedChangelistId;
+            } else {
+              // New hunk - check if it's an extension of an existing hunk
+              const extendedHunk = this.findExtendedHunk(hunk, previousHunks);
+              if (extendedHunk) {
+                // This hunk extends an existing hunk - keep it in the same changelist
+                const extendedChangelistId = this.hunkAssignments.get(extendedHunk.id) || extendedHunk.changelistId;
+                if (extendedChangelistId) {
+                  hunk.changelistId = extendedChangelistId;
+                  this.hunkAssignments.set(hunk.id, extendedChangelistId);
+                } else {
+                  // Fallback to active changelist
+                  hunk.changelistId = this.activeChangelistId || 'default';
+                  this.hunkAssignments.set(hunk.id, hunk.changelistId);
+                }
+              } else {
+                // Truly new hunk - assign to active changelist
+                hunk.changelistId = this.activeChangelistId || 'default';
+                this.hunkAssignments.set(hunk.id, hunk.changelistId);
+              }
+            }
+          }
+          
+          // Store current hunks as previous for next refresh
+          this.previousHunksByFile.set(file.path, allHunks);
+          
+          file.hunks = allHunks;
+          fileHunksMap.set(file.path, allHunks);
+        }
+      }
+
       // Apply recent moves to assignment map (these take highest priority)
       for (const [filePath, move] of this.recentMoves.entries()) {
         const file = gitFiles.find((f) => f.path === filePath);
@@ -345,7 +464,6 @@ export class NativeTreeProvider
 
       // Load persisted file assignments if available (only as fallback for files not in current state)
       // BUT: Don't use persisted assignments for files that are currently in unversioned
-      const persistedState = this.context.workspaceState.get<import('./types').PersistedState>('changelists');
       if (persistedState && persistedState.fileAssignments) {
         // Get set of files currently in unversioned (by path)
         const unversionedFilePaths = new Set(this.unversionedFiles.map(f => f.path));
@@ -374,57 +492,78 @@ export class NativeTreeProvider
       // Clear all changelists
       for (const changelist of this.changelists) {
         changelist.files = [];
+        changelist.hunks = [];
       }
 
-      // Use Set to track added files and prevent duplicates
-      const addedFileIds = new Set<string>();
-
-      // Distribute files to their assigned changelists
-      gitFiles.forEach((file) => {
-        // Skip if already added (prevent duplicates)
-        if (addedFileIds.has(file.id)) {
-          return;
-        }
-
+      // Distribute files to changelists based on their hunks
+      // A file appears in a changelist if ANY of its hunks belong to that changelist
+      for (const file of gitFiles) {
         // Restore selection state if it was previously selected
         if (selectionMap.has(file.id)) {
           file.isSelected = selectionMap.get(file.id)!;
         }
 
-        // Only add files that are already tracked by Git
+        // Only process files that are already tracked by Git
         if (file.status !== FileStatus.UNTRACKED) {
           // Check if file was explicitly moved to unversioned (should not be in changelist)
           if (filesToKeepInUnversioned.has(file.path)) {
-            // Skip this file - it should remain in unversioned files
-            // It will be handled in the unversioned files section below
-            return;
+            continue;
           }
 
-          const assignedChangelistId = changelistAssignmentMap.get(file.id);
+          const hunks = fileHunksMap.get(file.path) || [];
+          
+          if (hunks.length > 0) {
+            // File has hunks - assign to changelists based on hunk assignments
+            const changelistIds = new Set<string>();
+            for (const hunk of hunks) {
+              if (hunk.changelistId) {
+                changelistIds.add(hunk.changelistId);
+              }
+            }
 
-          if (assignedChangelistId) {
-            // File was previously assigned to a specific changelist
-            const targetChangelist = this.changelists.find((c) => c.id === assignedChangelistId);
-            if (targetChangelist) {
-              file.changelistId = targetChangelist.id;
-              targetChangelist.files.push(file);
-              this.sortChangelistFiles(targetChangelist);
-              addedFileIds.add(file.id);
+            // File appears in ALL changelists that contain any of its hunks
+            for (const changelistId of changelistIds) {
+              const targetChangelist = this.changelists.find((c) => c.id === changelistId);
+              if (targetChangelist) {
+                // Create a copy of the file for this changelist
+                const fileCopy = { ...file };
+                fileCopy.changelistId = changelistId;
+                targetChangelist.files.push(fileCopy);
+                
+                // Add hunks belonging to this changelist
+                const changelistHunks = hunks.filter(h => h.changelistId === changelistId);
+                targetChangelist.hunks.push(...changelistHunks);
+              }
             }
           } else {
-            // New file - add to active changelist (or default if no active is set)
-            const targetChangelist = this.activeChangelistId 
-              ? this.changelists.find((c) => c.id === this.activeChangelistId)
-              : this.changelists.find((c) => c.isDefault);
-            if (targetChangelist) {
-              file.changelistId = targetChangelist.id;
-              targetChangelist.files.push(file);
-              this.sortChangelistFiles(targetChangelist);
-              addedFileIds.add(file.id);
+            // File has no hunks - use file-level assignment (backward compatibility)
+            const assignedChangelistId = changelistAssignmentMap.get(file.id);
+
+            if (assignedChangelistId) {
+              // File was previously assigned to a specific changelist
+              const targetChangelist = this.changelists.find((c) => c.id === assignedChangelistId);
+              if (targetChangelist) {
+                file.changelistId = targetChangelist.id;
+                targetChangelist.files.push(file);
+              }
+            } else {
+              // New file - add to active changelist (or default if no active is set)
+              const targetChangelist = this.activeChangelistId 
+                ? this.changelists.find((c) => c.id === this.activeChangelistId)
+                : this.changelists.find((c) => c.isDefault);
+              if (targetChangelist) {
+                file.changelistId = targetChangelist.id;
+                targetChangelist.files.push(file);
+              }
             }
           }
         }
-      });
+      }
+
+      // Sort all changelists after loading
+      for (const changelist of this.changelists) {
+        this.sortChangelistFiles(changelist);
+      }
 
       // Restore selection states for unversioned files
       // Filter out any unversioned files that are already in changelists (by path matching)
@@ -487,7 +626,12 @@ export class NativeTreeProvider
     if (element instanceof FileTreeItem && element.changelistId) {
       const changelist = this.changelists.find((c) => c.id === element.changelistId);
       if (changelist) {
-        return new ChangelistTreeItem(changelist, vscode.TreeItemCollapsibleState.Expanded);
+        // Find the index of this changelist to determine color
+        const index = this.changelists.findIndex(c => c.id === changelist.id);
+        // Count non-default changelists before this one to get the color index
+        const nonDefaultBefore = this.changelists.slice(0, index).filter(c => !c.isDefault).length;
+        const colorIndex = changelist.isDefault ? undefined : nonDefaultBefore;
+        return new ChangelistTreeItem(changelist, vscode.TreeItemCollapsibleState.Expanded, false, colorIndex);
       }
     }
 
@@ -537,7 +681,11 @@ export class NativeTreeProvider
         }
 
         const isActive = changelist.id === this.activeChangelistId;
-        items.push(new ChangelistTreeItem(changelist, collapsibleState, isActive));
+        // Count non-default changelists before this one to get the color index
+        const changelistIndex = this.changelists.findIndex(c => c.id === changelist.id);
+        const nonDefaultBefore = this.changelists.slice(0, changelistIndex).filter(c => !c.isDefault).length;
+        const colorIndex = changelist.isDefault ? undefined : nonDefaultBefore;
+        items.push(new ChangelistTreeItem(changelist, collapsibleState, isActive, colorIndex));
       });
 
       // Add unversioned files section if there are any
@@ -572,6 +720,7 @@ export class NativeTreeProvider
       id: this.generateId(),
       name,
       files: [],
+      hunks: [],
       isExpanded: true, // Start expanded by default for new changelists
       createdAt: new Date(),
     };
@@ -781,8 +930,47 @@ export class NativeTreeProvider
           }
         }
 
-        file.changelistId = targetChangelistId;
-        targetChangelist.files.push(file);
+        // If file has hunks, move all hunks from source changelist to target changelist
+        if (file.hunks && file.hunks.length > 0 && sourceChangelist) {
+          // Find all hunks of this file that belong to the source changelist
+          const hunksToMove = file.hunks.filter(h => h.changelistId === sourceChangelist!.id);
+          
+          // Remove these hunks from source changelist
+          sourceChangelist.hunks = sourceChangelist.hunks.filter(h => 
+            !hunksToMove.some(ht => ht.id === h.id)
+          );
+          
+          // Update hunk assignments to target changelist
+          for (const hunk of hunksToMove) {
+            hunk.changelistId = targetChangelistId;
+          }
+          
+          // Add hunks to target changelist (merge with existing hunks from same file if any)
+          targetChangelist.hunks.push(...hunksToMove);
+          
+          // If source changelist has no more hunks from this file, remove the file from source
+          const remainingHunksInSource = file.hunks.filter(h => h.changelistId === sourceChangelist!.id);
+          if (remainingHunksInSource.length === 0) {
+            // File will be removed from source in the refresh
+          } else {
+            // File still has hunks in source, so it should remain there
+            // Re-add it to source (it was removed above)
+            sourceChangelist.files.push(file);
+          }
+          
+          // Add file to target changelist (or keep it if it's already there)
+          const fileExistsInTarget = targetChangelist.files.some(f => f.path === file!.path);
+          if (!fileExistsInTarget) {
+            const fileCopy = { ...file };
+            fileCopy.changelistId = targetChangelistId;
+            targetChangelist.files.push(fileCopy);
+          }
+        } else {
+          // File has no hunks - use file-level assignment (backward compatibility)
+          file.changelistId = targetChangelistId;
+          targetChangelist.files.push(file);
+        }
+
         this.sortChangelistFiles(targetChangelist);
 
         // Track this move to prevent it from being overwritten by immediate refreshes
@@ -830,6 +1018,16 @@ export class NativeTreeProvider
           console.error('Error refreshing after moving untracked file:', error);
         }
       }, 300);
+    } else if (file && file.hunks && file.hunks.length > 0) {
+      // File has hunks - refresh to update file assignments based on hunk changes
+      setTimeout(async () => {
+        try {
+          await this.loadGitStatus();
+          this._onDidChangeTreeData.fire(undefined);
+        } catch (error) {
+          console.error('Error refreshing after moving file with hunks:', error);
+        }
+      }, 100);
     }
   }
 
@@ -936,7 +1134,7 @@ export class NativeTreeProvider
   }
 
   getChangelistTreeItems(): ChangelistTreeItem[] {
-    return this.changelists.map((changelist) => {
+    return this.changelists.map((changelist, index) => {
       let collapsibleState: vscode.TreeItemCollapsibleState;
 
       if (changelist.files.length === 0) {
@@ -951,7 +1149,10 @@ export class NativeTreeProvider
       }
 
       const isActive = changelist.id === this.activeChangelistId;
-      const treeItem = new ChangelistTreeItem(changelist, collapsibleState, isActive);
+      // Count non-default changelists before this one to get the color index
+      const nonDefaultBefore = this.changelists.slice(0, index).filter(c => !c.isDefault).length;
+      const colorIndex = changelist.isDefault ? undefined : nonDefaultBefore;
+      const treeItem = new ChangelistTreeItem(changelist, collapsibleState, isActive, colorIndex);
       return treeItem;
     });
   }
@@ -975,7 +1176,12 @@ export class NativeTreeProvider
     }
 
     const isActive = changelist.id === this.activeChangelistId;
-    return new ChangelistTreeItem(changelist, collapsibleState, isActive);
+    // Find the index of this changelist to determine color
+    const index = this.changelists.findIndex(c => c.id === changelistId);
+    // Count non-default changelists before this one to get the color index
+    const nonDefaultBefore = this.changelists.slice(0, index).filter(c => !c.isDefault).length;
+    const colorIndex = changelist.isDefault ? undefined : nonDefaultBefore;
+    return new ChangelistTreeItem(changelist, collapsibleState, isActive, colorIndex);
   }
 
   getUnversionedFiles(): FileItem[] {
@@ -994,8 +1200,128 @@ export class NativeTreeProvider
     return allFiles;
   }
 
+  getHunkAssignments(): Map<string, string> {
+    return new Map(this.hunkAssignments);
+  }
+
+  /**
+   * Find if a new hunk extends an existing hunk (overlaps or is adjacent)
+   * Returns the existing hunk if found, null otherwise
+   * 
+   * A hunk is considered an extension if:
+   * - It overlaps with the old range (in HEAD) OR
+   * - It overlaps with the new range (in working tree) OR
+   * - It's very close to the previous hunk (within 3 lines)
+   */
+  private findExtendedHunk(newHunk: Hunk, previousHunks: Hunk[]): Hunk | null {
+    const proximityThreshold = 3; // Lines - consider hunks within 3 lines as potentially related
+    
+    for (const prevHunk of previousHunks) {
+      // Check if old ranges (HEAD) overlap
+      const oldOverlaps = 
+        newHunk.oldStart <= prevHunk.oldStart + prevHunk.oldLines &&
+        newHunk.oldStart + newHunk.oldLines >= prevHunk.oldStart;
+      
+      // Check if new ranges (working tree) overlap
+      const newOverlaps = 
+        newHunk.newStart <= prevHunk.newStart + prevHunk.newLines &&
+        newHunk.newStart + newHunk.newLines >= prevHunk.newStart;
+      
+      // Check if hunks are very close (within threshold)
+      const oldStartClose = Math.abs(newHunk.oldStart - prevHunk.oldStart) <= proximityThreshold;
+      const oldEndClose = Math.abs(
+        (newHunk.oldStart + newHunk.oldLines) - (prevHunk.oldStart + prevHunk.oldLines)
+      ) <= proximityThreshold;
+      const newStartClose = Math.abs(newHunk.newStart - prevHunk.newStart) <= proximityThreshold;
+      const newEndClose = Math.abs(
+        (newHunk.newStart + newHunk.newLines) - (prevHunk.newStart + prevHunk.newLines)
+      ) <= proximityThreshold;
+      
+      // If ranges overlap or are very close, consider it an extension
+      if (oldOverlaps || newOverlaps || oldStartClose || oldEndClose || newStartClose || newEndClose) {
+        return prevHunk;
+      }
+    }
+    
+    return null;
+  }
+
   private generateId(): string {
     return Date.now().toString(36) + Math.random().toString(36).substr(2);
+  }
+
+  async moveHunkToChangelist(hunkId: string, targetChangelistId: string): Promise<void> {
+    // Find the hunk in all changelists
+    let hunk: Hunk | undefined;
+    let sourceChangelist: Changelist | undefined;
+
+    for (const changelist of this.changelists) {
+      const foundHunk = changelist.hunks.find(h => h.id === hunkId);
+      if (foundHunk) {
+        hunk = foundHunk;
+        sourceChangelist = changelist;
+        break;
+      }
+    }
+
+    if (!hunk || !sourceChangelist) {
+      return;
+    }
+
+    const targetChangelist = this.changelists.find(c => c.id === targetChangelistId);
+    if (!targetChangelist) {
+      return;
+    }
+
+    // Remove hunk from source changelist
+    sourceChangelist.hunks = sourceChangelist.hunks.filter(h => h.id !== hunkId);
+
+    // Update hunk assignment
+    hunk.changelistId = targetChangelistId;
+    this.hunkAssignments.set(hunk.id, targetChangelistId);
+
+    // Add hunk to target changelist
+    targetChangelist.hunks.push(hunk);
+
+    // Update file assignments - files appear in changelists based on their hunks
+    // Refresh will handle this, but we need to update immediately for UI
+    await this.saveChangelists();
+    
+    // Refresh to update file assignments
+    await this.loadGitStatus();
+    this._onDidChangeTreeData.fire(undefined);
+  }
+
+  getHunkAtLine(filePath: string, line: number): Hunk | null {
+    // Find hunk that contains this line (line is 1-based)
+    for (const changelist of this.changelists) {
+      for (const hunk of changelist.hunks) {
+        if (hunk.filePath === filePath) {
+          const hunkStart = hunk.newStart;
+          const hunkEnd = hunk.newStart + hunk.newLines - 1;
+          if (line >= hunkStart && line <= hunkEnd) {
+            return hunk;
+          }
+        }
+      }
+    }
+    
+    // Also check files for hunks that might not be in changelists yet
+    for (const changelist of this.changelists) {
+      for (const file of changelist.files) {
+        if (file.path === filePath && file.hunks) {
+          for (const hunk of file.hunks) {
+            const hunkStart = hunk.newStart;
+            const hunkEnd = hunk.newStart + hunk.newLines - 1;
+            if (line >= hunkStart && line <= hunkEnd) {
+              return hunk;
+            }
+          }
+        }
+      }
+    }
+    
+    return null;
   }
 
   private sortChangelistFiles(changelist: Changelist): void {

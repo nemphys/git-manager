@@ -1,8 +1,21 @@
+export interface Hunk {
+  id: string;
+  filePath: string;
+  oldStart: number;
+  oldLines: number;
+  newStart: number;
+  newLines: number;
+  content: string; // hunk content preview
+  changelistId?: string;
+  isStaged: boolean;
+}
+
 export interface Changelist {
   id: string;
   name: string;
   description?: string;
   files: FileItem[];
+  hunks: Hunk[]; // Track hunks in addition to files
   isDefault?: boolean;
   isExpanded?: boolean;
   createdAt: Date;
@@ -17,6 +30,7 @@ export interface FileItem {
   changelistId?: string;
   relativePath: string;
   isStaged?: boolean; // Whether the file is staged (in index)
+  hunks?: Hunk[]; // Optional hunks for this file
 }
 
 export enum FileStatus {
@@ -59,5 +73,6 @@ export interface PersistedChangelist {
 export interface PersistedState {
   changelists: PersistedChangelist[];
   fileAssignments: { [filePath: string]: string }; // file path → changelist ID
+  hunkAssignments: { [hunkId: string]: string }; // hunk ID → changelist ID
   activeChangelistId?: string; // ID of the active changelist
 }

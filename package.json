@@ -52,7 +52,8 @@
     "onCommand:git-manager.untrackFile",
     "onCommand:git-manager.openDiff",
     "onCommand:git-manager.openFile",
-    "onCommand:git-manager.clearPersistedState"
+    "onCommand:git-manager.clearPersistedState",
+    "onCommand:git-manager.moveHunkToChangelist"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -195,6 +196,12 @@
         "command": "git-manager.openFile",
         "title": "Open File",
         "category": "JetBrains Commit Manager"
+      },
+      {
+        "command": "git-manager.moveHunkToChangelist",
+        "title": "Move to Changelist...",
+        "category": "JetBrains Commit Manager",
+        "icon": "$(list-tree)"
       }
     ],
     "viewsContainers": {
@@ -298,6 +305,13 @@
           "command": "git-manager.openFile",
           "when": "view == git-manager.changelists && (viewItem == file || viewItem == stagedFile || viewItem == unstagedFile || viewItem == stagedFileActive || viewItem == unstagedFileActive)",
           "group": "navigation@2"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "git-manager.moveHunkToChangelist",
+          "when": "editorTextFocus && resourceLangId != ''",
+          "group": "git-manager@1"
         }
       ]
     }

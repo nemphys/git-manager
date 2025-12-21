@@ -19,6 +19,7 @@ export class WebviewCommitManager {
       name: 'Changes',
       description: 'Default changelist',
       files: [],
+      hunks: [],
       isDefault: true,
       createdAt: new Date(),
     };
@@ -104,6 +105,7 @@ export class WebviewCommitManager {
       name,
       description,
       files: [],
+      hunks: [],
       createdAt: new Date(),
     };
 

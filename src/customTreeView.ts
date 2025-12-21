@@ -23,6 +23,7 @@ export class CustomTreeViewProvider implements vscode.TreeDataProvider<vscode.Tr
       name: 'Changes',
       description: 'Default changelist',
       files: [],
+      hunks: [],
       isDefault: true,
       createdAt: new Date(),
     };
@@ -93,6 +94,7 @@ export class CustomTreeViewProvider implements vscode.TreeDataProvider<vscode.Tr
       name,
       description,
       files: [],
+      hunks: [],
       createdAt: new Date(),
     };
 

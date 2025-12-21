@@ -78,6 +78,7 @@ export class CommitManagerProvider implements vscode.TreeDataProvider<vscode.Tre
       name: 'Changes',
       description: 'Default changelist',
       files: [],
+      hunks: [],
       isDefault: true,
       createdAt: new Date(),
     };
@@ -144,6 +145,7 @@ export class CommitManagerProvider implements vscode.TreeDataProvider<vscode.Tre
       name,
       description,
       files: [],
+      hunks: [],
       createdAt: new Date(),
     };
 

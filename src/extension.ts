@@ -3,8 +3,9 @@
 import * as vscode from 'vscode';
 import { NativeTreeProvider, ChangelistTreeItem, FileTreeItem } from './nativeTreeProvider';
 import { GitService } from './gitService';
-import { FileItem, FileStatus } from './types';
+import { FileItem, FileStatus, Hunk } from './types';
 import { CommitUI } from './commitUI';
+import { HunkDecorationProvider } from './hunkDecorations';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -16,6 +17,97 @@ let commitStatusBarItem: vscode.StatusBarItem;
 let commitMessageInput: vscode.StatusBarItem;
 let isExpanded: boolean = false; // Track expand/collapse state
 let commitUI: CommitUI;
+let hunkDecorationProvider: HunkDecorationProvider;
+
+// Helper function to create a filtered file version with only hunks from a specific changelist
+async function createFilteredFileVersion(
+  filePath: string,
+  changelistId: string,
+  workspaceRoot: string,
+  gitService: GitService,
+  treeProvider: NativeTreeProvider
+): Promise<string | null> {
+  try {
+    // Get HEAD version of the file
+    const { execSync } = require('child_process');
+    let headContent: string;
+    try {
+      headContent = execSync(`git show HEAD:"${filePath}"`, {
+        cwd: workspaceRoot,
+        encoding: 'utf8',
+        maxBuffer: 10 * 1024 * 1024,
+      });
+    } catch (error) {
+      // File might not exist in HEAD (new file), use empty content
+      headContent = '';
+    }
+
+    // Get all hunks for the file
+    const unstagedHunks = await gitService.getFileHunks(filePath);
+    const stagedHunks = await gitService.getStagedHunks(filePath);
+    const allHunks = [...unstagedHunks, ...stagedHunks];
+
+    // Filter hunks to only those belonging to the specified changelist
+    const hunkAssignments = treeProvider.getHunkAssignments();
+    const filteredHunks = allHunks.filter(hunk => {
+      const assignedChangelistId = hunkAssignments.get(hunk.id) || hunk.changelistId;
+      return assignedChangelistId === changelistId;
+    });
+
+    if (filteredHunks.length === 0) {
+      // No hunks in this changelist, return HEAD version
+      const tempFile = path.join(os.tmpdir(), `git-manager-filtered-${Date.now()}-${path.basename(filePath)}`);
+      fs.writeFileSync(tempFile, headContent);
+      return tempFile;
+    }
+
+    // Sort hunks by oldStart (line numbers in HEAD version) in reverse order
+    // We process from end to beginning to avoid line number shifts
+    filteredHunks.sort((a, b) => b.oldStart - a.oldStart);
+
+    // Apply hunks to HEAD content to create filtered version
+    const headLines = headContent.split('\n');
+
+    for (const hunk of filteredHunks) {
+      // Parse hunk content to extract the actual changes
+      const hunkLines = hunk.content.split('\n');
+      const newLines: string[] = [];
+      
+      // Track context lines to match them with HEAD content
+      let contextCount = 0;
+      
+      for (const line of hunkLines) {
+        if (line.startsWith(' ')) {
+          // Context line - matches HEAD, keep it
+          newLines.push(line.substring(1));
+          contextCount++;
+        } else if (line.startsWith('-')) {
+          // Deletion - skip this line from HEAD
+          // Don't add to newLines
+        } else if (line.startsWith('+') && !line.startsWith('+++')) {
+          // Addition - add this line
+          newLines.push(line.substring(1));
+        }
+      }
+
+      // Calculate positions in HEAD version (0-based)
+      const oldStartIndex = hunk.oldStart - 1;
+      
+      // Replace old lines with new lines
+      headLines.splice(oldStartIndex, hunk.oldLines, ...newLines);
+    }
+    
+    const filteredLines = headLines;
+
+    // Create temporary file with filtered content
+    const tempFile = path.join(os.tmpdir(), `git-manager-filtered-${Date.now()}-${path.basename(filePath)}`);
+    fs.writeFileSync(tempFile, filteredLines.join('\n'));
+    return tempFile;
+  } catch (error) {
+    console.error('Error creating filtered file version:', error);
+    return null;
+  }
+}
 
 export async function activate(context: vscode.ExtensionContext) {
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -26,9 +118,14 @@ export async function activate(context: vscode.ExtensionContext) {
   if (workspaceRoot) {
     treeProvider = new NativeTreeProvider(workspaceRoot, context);
     gitService = new GitService(workspaceRoot);
+    hunkDecorationProvider = new HunkDecorationProvider(gitService);
 
     // Load persisted changelists before refreshing
     await treeProvider.loadPersistedChangelists();
+    
+    // Update hunk decoration provider with initial changelists
+    hunkDecorationProvider.updateChangelists(treeProvider.getChangelists());
+    hunkDecorationProvider.updateHunkAssignments(treeProvider.getHunkAssignments());
 
     // Create the tree view
     treeView = vscode.window.createTreeView('git-manager.changelists', {
@@ -135,7 +232,7 @@ export async function activate(context: vscode.ExtensionContext) {
     }),
 
     // Open a diff for a file from the tree
-    vscode.commands.registerCommand('git-manager.openDiff', async (uri: vscode.Uri, fileStatus?: FileStatus) => {
+    vscode.commands.registerCommand('git-manager.openDiff', async (uri: vscode.Uri, fileStatus?: FileStatus, changelistId?: string) => {
       let tempEmptyFile: string | undefined;
       let tempHeadFile: string | undefined;
       try {
@@ -216,8 +313,30 @@ export async function activate(context: vscode.ExtensionContext) {
             query: JSON.stringify({ path: uri.fsPath, ref: 'HEAD' }),
           });
 
-          right = uri; // working tree
-          title = `${fileName} (HEAD ↔︎ Working Tree)`;
+          // If changelistId is provided, create a filtered version with only hunks from that changelist
+          if (changelistId && treeProvider && workspaceRoot) {
+            try {
+              const filteredFile = await createFilteredFileVersion(relativePath, changelistId, workspaceRoot, gitService, treeProvider);
+              if (filteredFile) {
+                right = vscode.Uri.file(filteredFile);
+                const changelist = treeProvider.getChangelists().find(c => c.id === changelistId);
+                const changelistName = changelist ? changelist.name : 'Changelist';
+                title = `${fileName} (HEAD ↔︎ ${changelistName})`;
+                // Store temp file for cleanup (reuse tempEmptyFile variable)
+                tempEmptyFile = filteredFile;
+              } else {
+                right = uri; // fallback to full working tree
+                title = `${fileName} (HEAD ↔︎ Working Tree)`;
+              }
+            } catch (error) {
+              console.error('Error creating filtered file version:', error);
+              right = uri; // fallback to full working tree
+              title = `${fileName} (HEAD ↔︎ Working Tree)`;
+            }
+          } else {
+            right = uri; // working tree
+            title = `${fileName} (HEAD ↔︎ Working Tree)`;
+          }
         }
 
         await vscode.commands.executeCommand('vscode.diff', left, right, title);
@@ -519,7 +638,7 @@ export async function activate(context: vscode.ExtensionContext) {
         if (!choice) {
           return;
         }
-        const success = await gitService.commitFiles(files, message.trim(), { amend: choice.amend });
+        const success = await gitService.commitFiles(files, message.trim(), { amend: choice.amend, changelistId: activeChangelistId });
 
         if (success) {
           vscode.window.showInformationMessage(`Successfully committed ${files.length} file(s)`);
@@ -590,7 +709,7 @@ export async function activate(context: vscode.ExtensionContext) {
         if (!choice) {
           return;
         }
-        const success = await gitService.commitFiles(files, message.trim(), { amend: choice.amend });
+        const success = await gitService.commitFiles(files, message.trim(), { amend: choice.amend, changelistId: activeChangelistId });
 
         if (success) {
           vscode.window.showInformationMessage(`Successfully committed ${files.length} file(s)`);
@@ -963,7 +1082,7 @@ export async function activate(context: vscode.ExtensionContext) {
         if (!choice) {
           return;
         }
-        const success = await gitService.commitFiles(selectedFiles, message.trim(), { amend: choice.amend });
+        const success = await gitService.commitFiles(selectedFiles, message.trim(), { amend: choice.amend, changelistId: activeChangelistId });
 
         if (success) {
           vscode.window.showInformationMessage(`Successfully committed ${selectedFiles.length} file(s)`);
@@ -1101,6 +1220,67 @@ export async function activate(context: vscode.ExtensionContext) {
         }
       }
     }),
+
+    // Command to move hunk to changelist (from gutter context menu)
+    vscode.commands.registerCommand('git-manager.moveHunkToChangelist', async (uri?: vscode.Uri, line?: number) => {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor) {
+        vscode.window.showWarningMessage('No active editor found.');
+        return;
+      }
+
+      // Get line from selection or cursor position if not provided
+      if (line === undefined) {
+        line = editor.selection.active.line + 1; // Convert to 1-based
+      }
+
+      // Use editor's document URI if not provided
+      if (!uri) {
+        uri = editor.document.uri;
+      }
+
+      const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      if (!workspaceRoot) {
+        return;
+      }
+
+      const relativePath = vscode.workspace.asRelativePath(uri);
+      // Try to get hunk from decoration provider first, then from tree provider
+      let hunk = hunkDecorationProvider ? hunkDecorationProvider.getHunkAtLine(relativePath, line) : null;
+      if (!hunk) {
+        hunk = treeProvider.getHunkAtLine(relativePath, line);
+      }
+
+      if (!hunk) {
+        vscode.window.showInformationMessage(`No hunk found at line ${line}. Make sure you're clicking on a line with changes.`);
+        return;
+      }
+
+      const changelists = treeProvider.getChangelists();
+      const currentChangelist = changelists.find(c => c.id === hunk.changelistId);
+      const currentChangelistName = currentChangelist ? currentChangelist.name : 'Default';
+
+      const options = changelists.map((c) => ({
+        label: c.name,
+        value: c.id,
+        description: c.id === hunk.changelistId ? 'Current' : undefined,
+      }));
+
+      const selected = await vscode.window.showQuickPick(options, {
+        placeHolder: `Move hunk to changelist (Current: ${currentChangelistName})`,
+      });
+
+      if (selected) {
+        await treeProvider.moveHunkToChangelist(hunk.id, selected.value);
+        // Update hunk decoration provider
+        if (hunkDecorationProvider) {
+          hunkDecorationProvider.updateChangelists(treeProvider.getChangelists());
+          hunkDecorationProvider.updateHunkAssignments(treeProvider.getHunkAssignments());
+        // Decorations will be updated via onDidChangeTreeData
+        }
+        vscode.window.showInformationMessage(`Hunk moved to "${selected.label}"`);
+      }
+    }),
   ];
 
   context.subscriptions.push(...commands);
@@ -1112,7 +1292,64 @@ export async function activate(context: vscode.ExtensionContext) {
   if (treeProvider) {
     treeProvider.refresh();
     updateAllCommitUI();
+    
+    // Update decorations when tree data changes
+    treeProvider.onDidChangeTreeData(() => {
+      if (hunkDecorationProvider) {
+        hunkDecorationProvider.updateChangelists(treeProvider.getChangelists());
+        hunkDecorationProvider.updateActiveChangelist(treeProvider.getActiveChangelistId());
+        hunkDecorationProvider.updateHunkAssignments(treeProvider.getHunkAssignments());
+        
+        // Collect all hunks from changelists by file
+          const hunksByFile = new Map<string, Hunk[]>();
+          for (const changelist of treeProvider.getChangelists()) {
+            for (const hunk of changelist.hunks) {
+            if (!hunksByFile.has(hunk.filePath)) {
+              hunksByFile.set(hunk.filePath, []);
+            }
+            // Avoid duplicates
+            if (!hunksByFile.get(hunk.filePath)!.some(h => h.id === hunk.id)) {
+              hunksByFile.get(hunk.filePath)!.push(hunk);
+            }
+          }
+        }
+        // Also check files for hunks
+        for (const changelist of treeProvider.getChangelists()) {
+          for (const file of changelist.files) {
+            if (file.hunks) {
+              for (const hunk of file.hunks) {
+                if (!hunksByFile.has(hunk.filePath)) {
+                  hunksByFile.set(hunk.filePath, []);
+                }
+                if (!hunksByFile.get(hunk.filePath)!.some(h => h.id === hunk.id)) {
+                  hunksByFile.get(hunk.filePath)!.push(hunk);
+                }
+              }
+            }
+          }
+        }
+        hunkDecorationProvider.updateHunksByFile(hunksByFile);
+      }
+    });
   }
+
+  // Update decorations when editors open or change
+  vscode.window.onDidChangeActiveTextEditor(async (editor) => {
+    if (hunkDecorationProvider && editor) {
+      // Update immediately - hunks should already be available
+      await hunkDecorationProvider.updateDecorationsForEditor(editor);
+    }
+  });
+
+  vscode.workspace.onDidOpenTextDocument(async (document) => {
+    const editor = vscode.window.visibleTextEditors.find(e => e.document === document);
+    if (hunkDecorationProvider && editor) {
+      // Update immediately - hunks should already be available
+      await hunkDecorationProvider.updateDecorationsForEditor(editor);
+    }
+  });
+
+  // Initial decoration update will happen via onDidChangeTreeData after first refresh
 
   // Set up file system watcher to refresh on file changes
   const fileSystemWatcher = vscode.workspace.createFileSystemWatcher('**/*');
@@ -1176,16 +1413,27 @@ export async function activate(context: vscode.ExtensionContext) {
 
       treeProvider.refresh();
       updateAllCommitUI();
+      // Decorations will be updated via onDidChangeTreeData listener
     }
   });
   fileSystemWatcher.onDidDelete(() => {
     if (treeProvider) {
       treeProvider.refresh();
       updateAllCommitUI();
+      // Decorations will be updated via onDidChangeTreeData listener
     }
   });
 
   context.subscriptions.push(fileSystemWatcher);
+  
+  // Dispose decoration provider on deactivate
+  context.subscriptions.push({
+    dispose: () => {
+      if (hunkDecorationProvider) {
+        hunkDecorationProvider.dispose();
+      }
+    }
+  });
 }
 
 function createCommitStatusBarItems() {

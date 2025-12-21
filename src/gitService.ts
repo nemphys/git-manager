@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { FileItem, FileStatus } from './types';
+import { FileItem, FileStatus, Hunk } from './types';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -78,14 +78,54 @@ export class GitService {
     }
   }
 
-  async commitFiles(files: FileItem[], message: string, options?: { amend?: boolean }): Promise<boolean> {
+  async commitFiles(files: FileItem[], message: string, options?: { amend?: boolean; changelistId?: string }): Promise<boolean> {
     try {
       if (files.length === 0) {
         throw new Error('No files selected for commit');
       }
 
-      // Stage the selected files according to their status so commit will succeed
+      // Check if any files have hunks assigned to the changelist
+      const filesWithHunks: FileItem[] = [];
+      const filesWithoutHunks: FileItem[] = [];
+      const hunksToStage: Hunk[] = [];
+
       for (const file of files) {
+        if (file.hunks && file.hunks.length > 0 && options?.changelistId) {
+          // File has hunks - collect hunks from this changelist
+          const changelistHunks = file.hunks.filter(h => h.changelistId === options.changelistId);
+          if (changelistHunks.length > 0) {
+            filesWithHunks.push(file);
+            hunksToStage.push(...changelistHunks);
+          } else {
+            // File has hunks but none in this changelist - skip it
+            continue;
+          }
+        } else {
+          // File has no hunks or no changelist specified - use file-level staging
+          filesWithoutHunks.push(file);
+        }
+      }
+
+      // Stage hunks if we have any
+      if (hunksToStage.length > 0) {
+        // First, unstage all changes in these files to start clean
+        const filePaths = [...new Set(hunksToStage.map(h => h.filePath))];
+        for (const filePath of filePaths) {
+          try {
+            await this.unstageFile(filePath);
+          } catch (e) {
+            // Ignore errors if file wasn't staged
+          }
+        }
+
+        // Stage only the hunks from this changelist
+        for (const hunk of hunksToStage) {
+          await this.stageHunk(hunk);
+        }
+      }
+
+      // Stage files without hunks (backward compatibility)
+      for (const file of filesWithoutHunks) {
         switch (file.status) {
           case FileStatus.UNTRACKED:
           case FileStatus.ADDED:
@@ -102,13 +142,18 @@ export class GitService {
         }
       }
 
-      const filePaths = files.map((f) => f.path);
+      const allFilePaths = [...new Set([...filesWithHunks.map(f => f.path), ...filesWithoutHunks.map(f => f.path)])];
+      
+      if (allFilePaths.length === 0) {
+        throw new Error('No files to commit');
+      }
+
       // Commit only the selected files (limit commit to these paths even if other files are staged)
       const commitArgs = ['commit', '-m', message, '--only'];
       if (options?.amend) {
         commitArgs.push('--amend', '--no-edit');
       }
-      commitArgs.push('--', ...filePaths);
+      commitArgs.push('--', ...allFilePaths);
       await this.executeGitCommand(commitArgs);
 
       return true;
@@ -482,5 +527,225 @@ export class GitService {
 
   private generateFileId(path: string): string {
     return Buffer.from(path).toString('base64');
+  }
+
+  private generateHunkId(filePath: string, oldStart: number, newStart: number): string {
+    return Buffer.from(`${filePath}:${oldStart}:${newStart}`).toString('base64');
+  }
+
+  async getFileHunks(filePath: string): Promise<Hunk[]> {
+    try {
+      // Get diff for the file
+      const { stdout } = await this.executeGitCommand(['diff', '--unified=0', '--', filePath]);
+      
+      if (!stdout.trim()) {
+        return [];
+      }
+
+      const hunks: Hunk[] = [];
+      const lines = stdout.split('\n');
+      let currentHunk: Partial<Hunk> | null = null;
+      let hunkContent: string[] = [];
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        
+        // Match hunk header: @@ -oldStart,oldLines +newStart,newLines @@
+        const hunkHeaderMatch = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
+        
+        if (hunkHeaderMatch) {
+          // Save previous hunk if exists
+          if (currentHunk) {
+            currentHunk.content = hunkContent.join('\n');
+            currentHunk.id = this.generateHunkId(
+              filePath,
+              currentHunk.oldStart!,
+              currentHunk.newStart!
+            );
+            hunks.push(currentHunk as Hunk);
+          }
+
+          // Start new hunk
+          const oldStart = parseInt(hunkHeaderMatch[1], 10);
+          const oldLines = hunkHeaderMatch[2] ? parseInt(hunkHeaderMatch[2], 10) : 1;
+          const newStart = parseInt(hunkHeaderMatch[3], 10);
+          const newLines = hunkHeaderMatch[4] ? parseInt(hunkHeaderMatch[4], 10) : 1;
+
+          currentHunk = {
+            filePath: filePath,
+            oldStart: oldStart,
+            oldLines: oldLines,
+            newStart: newStart,
+            newLines: newLines,
+            isStaged: false,
+            content: '',
+          };
+          hunkContent = [];
+        } else if (currentHunk && (line.startsWith('+') || line.startsWith('-') || line.startsWith(' '))) {
+          // Collect hunk content (context lines, additions, deletions)
+          hunkContent.push(line);
+        }
+      }
+
+      // Save last hunk
+      if (currentHunk) {
+        currentHunk.content = hunkContent.join('\n');
+        currentHunk.id = this.generateHunkId(
+          filePath,
+          currentHunk.oldStart!,
+          currentHunk.newStart!
+        );
+        hunks.push(currentHunk as Hunk);
+      }
+
+      return hunks;
+    } catch (error) {
+      console.error('Error getting file hunks:', error);
+      return [];
+    }
+  }
+
+  async getStagedHunks(filePath: string): Promise<Hunk[]> {
+    try {
+      // Get staged diff for the file
+      const { stdout } = await this.executeGitCommand(['diff', '--cached', '--unified=0', '--', filePath]);
+      
+      if (!stdout.trim()) {
+        return [];
+      }
+
+      const hunks: Hunk[] = [];
+      const lines = stdout.split('\n');
+      let currentHunk: Partial<Hunk> | null = null;
+      let hunkContent: string[] = [];
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        
+        // Match hunk header: @@ -oldStart,oldLines +newStart,newLines @@
+        const hunkHeaderMatch = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
+        
+        if (hunkHeaderMatch) {
+          // Save previous hunk if exists
+          if (currentHunk) {
+            currentHunk.content = hunkContent.join('\n');
+            currentHunk.id = this.generateHunkId(
+              filePath,
+              currentHunk.oldStart!,
+              currentHunk.newStart!
+            );
+            hunks.push(currentHunk as Hunk);
+          }
+
+          // Start new hunk
+          const oldStart = parseInt(hunkHeaderMatch[1], 10);
+          const oldLines = hunkHeaderMatch[2] ? parseInt(hunkHeaderMatch[2], 10) : 1;
+          const newStart = parseInt(hunkHeaderMatch[3], 10);
+          const newLines = hunkHeaderMatch[4] ? parseInt(hunkHeaderMatch[4], 10) : 1;
+
+          currentHunk = {
+            filePath: filePath,
+            oldStart: oldStart,
+            oldLines: oldLines,
+            newStart: newStart,
+            newLines: newLines,
+            isStaged: true,
+            content: '',
+          };
+          hunkContent = [];
+        } else if (currentHunk && (line.startsWith('+') || line.startsWith('-') || line.startsWith(' '))) {
+          // Collect hunk content
+          hunkContent.push(line);
+        }
+      }
+
+      // Save last hunk
+      if (currentHunk) {
+        currentHunk.content = hunkContent.join('\n');
+        currentHunk.id = this.generateHunkId(
+          filePath,
+          currentHunk.oldStart!,
+          currentHunk.newStart!
+        );
+        hunks.push(currentHunk as Hunk);
+      }
+
+      return hunks;
+    } catch (error) {
+      console.error('Error getting staged hunks:', error);
+      return [];
+    }
+  }
+
+  async stageHunk(hunk: Hunk): Promise<boolean> {
+    try {
+      // Create a temporary patch file with only this hunk
+      const tempPatchFile = path.join(os.tmpdir(), `git-hunk-${Date.now()}-${Math.random().toString(36).substr(2, 9)}.patch`);
+      
+      // Build the patch content
+      const patchContent = `--- a/${hunk.filePath}\n+++ b/${hunk.filePath}\n@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@\n${hunk.content}`;
+      
+      fs.writeFileSync(tempPatchFile, patchContent);
+
+      try {
+        // Apply the patch to the staging area
+        await this.executeGitCommand(['apply', '--cached', tempPatchFile]);
+        return true;
+      } finally {
+        // Clean up temp file
+        try {
+          if (fs.existsSync(tempPatchFile)) {
+            fs.unlinkSync(tempPatchFile);
+          }
+        } catch (e) {
+          // Ignore cleanup errors
+        }
+      }
+    } catch (error) {
+      console.error('Error staging hunk:', error);
+      return false;
+    }
+  }
+
+  async unstageHunk(hunk: Hunk): Promise<boolean> {
+    try {
+      // Create a reverse patch to unstage
+      const tempPatchFile = path.join(os.tmpdir(), `git-hunk-unstage-${Date.now()}-${Math.random().toString(36).substr(2, 9)}.patch`);
+      
+      // Build reverse patch (swap old and new)
+      const reverseContent = hunk.content
+        .split('\n')
+        .map(line => {
+          if (line.startsWith('+')) {
+            return '-' + line.substring(1);
+          } else if (line.startsWith('-')) {
+            return '+' + line.substring(1);
+          }
+          return line;
+        })
+        .join('\n');
+      
+      const patchContent = `--- a/${hunk.filePath}\n+++ b/${hunk.filePath}\n@@ -${hunk.newStart},${hunk.newLines} +${hunk.oldStart},${hunk.oldLines} @@\n${reverseContent}`;
+      
+      fs.writeFileSync(tempPatchFile, patchContent);
+
+      try {
+        // Apply reverse patch to unstage
+        await this.executeGitCommand(['apply', '--cached', '--reverse', tempPatchFile]);
+        return true;
+      } finally {
+        // Clean up temp file
+        try {
+          if (fs.existsSync(tempPatchFile)) {
+            fs.unlinkSync(tempPatchFile);
+          }
+        } catch (e) {
+          // Ignore cleanup errors
+        }
+      }
+    } catch (error) {
+      console.error('Error unstaging hunk:', error);
+      return false;
+    }
   }
 }
