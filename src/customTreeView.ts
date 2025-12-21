@@ -218,7 +218,7 @@ export class FileTreeItem extends vscode.TreeItem {
 
     // Add checkbox-like behavior
     this.command = {
-      command: 'jetbrains-commit-manager.toggleFileSelection',
+      command: 'git-manager.toggleFileSelection',
       title: 'Toggle Selection',
       arguments: [file.id],
     };

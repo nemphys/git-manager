@@ -1,12 +1,12 @@
 {
-  "name": "jetbrains-commit-manager",
-  "displayName": "Jetbrains Commit Manager",
-  "description": "A commit manager that replicates Jetbrains IDE commit managements",
-  "version": "0.0.5",
-  "publisher": "monishkumarv",
+  "name": "git-manager",
+  "displayName": "GIT manager for VS Code",
+  "description": "A VSCode plugin to manage git commits in a similar manner to Jetbrains IDEs",
+  "version": "0.0.1",
+  "publisher": "nemphys",
   "icon": "resources/commit-manager-logo.png",
   "repository": {
-    "url": "https://github.com/monishkumarv/jetbrains-commit-manager"
+    "url": "https://github.com/nemphys/git-manager.git"
   },
   "license": "MIT",
   "keywords": [
@@ -26,149 +26,156 @@
     "Other"
   ],
   "activationEvents": [
-    "onView:jetbrains-commit-manager.changelists",
+    "onView:git-manager.changelists",
     "workspaceContains:.git",
-    "onCommand:jetbrains-commit-manager.openCommitManager",
-    "onCommand:jetbrains-commit-manager.test",
-    "onCommand:jetbrains-commit-manager.createChangelist",
-    "onCommand:jetbrains-commit-manager.deleteChangelist",
-    "onCommand:jetbrains-commit-manager.commitSelectedFiles",
-    "onCommand:jetbrains-commit-manager.collapseAll",
-    "onCommand:jetbrains-commit-manager.moveFileToChangelist",
-    "onCommand:jetbrains-commit-manager.toggleFileSelection",
-    "onCommand:jetbrains-commit-manager.refresh",
-    "onCommand:jetbrains-commit-manager.selectAllFiles",
-    "onCommand:jetbrains-commit-manager.deselectAllFiles",
-    "onCommand:jetbrains-commit-manager.commitFromStatusBar",
-    "onCommand:jetbrains-commit-manager.stashFromStatusBar",
-    "onCommand:jetbrains-commit-manager.updateCommitMessage",
-    "onCommand:jetbrains-commit-manager.toggleAutoStage",
-    "onCommand:jetbrains-commit-manager.renameChangelist",
-    "onCommand:jetbrains-commit-manager.revertSelectedFiles",
-    "onCommand:jetbrains-commit-manager.revertFile",
-    "onCommand:jetbrains-commit-manager.revertChangelist",
-    "onCommand:jetbrains-commit-manager.stashSelectedFiles",
-    "onCommand:jetbrains-commit-manager.openDiff",
-    "onCommand:jetbrains-commit-manager.openFile"
+    "onCommand:git-manager.openCommitManager",
+    "onCommand:git-manager.test",
+    "onCommand:git-manager.createChangelist",
+    "onCommand:git-manager.deleteChangelist",
+    "onCommand:git-manager.commitSelectedFiles",
+    "onCommand:git-manager.collapseAll",
+    "onCommand:git-manager.moveFileToChangelist",
+    "onCommand:git-manager.toggleFileSelection",
+    "onCommand:git-manager.refresh",
+    "onCommand:git-manager.selectAllFiles",
+    "onCommand:git-manager.deselectAllFiles",
+    "onCommand:git-manager.commitFromStatusBar",
+    "onCommand:git-manager.stashFromStatusBar",
+    "onCommand:git-manager.updateCommitMessage",
+    "onCommand:git-manager.toggleAutoStage",
+    "onCommand:git-manager.renameChangelist",
+    "onCommand:git-manager.revertSelectedFiles",
+    "onCommand:git-manager.revertFile",
+    "onCommand:git-manager.revertChangelist",
+    "onCommand:git-manager.stashSelectedFiles",
+    "onCommand:git-manager.openDiff",
+    "onCommand:git-manager.openFile",
+    "onCommand:git-manager.clearPersistedState"
   ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
       {
-        "command": "jetbrains-commit-manager.openCommitManager",
+        "command": "git-manager.openCommitManager",
         "title": "Open Commit Manager",
         "category": "JetBrains Commit Manager"
       },
       {
-        "command": "jetbrains-commit-manager.test",
+        "command": "git-manager.test",
         "title": "Test Extension",
         "category": "JetBrains Commit Manager"
       },
       {
-        "command": "jetbrains-commit-manager.createChangelist",
+        "command": "git-manager.createChangelist",
         "title": "Create Changelist",
         "category": "JetBrains Commit Manager",
         "icon": "$(add)"
       },
       {
-        "command": "jetbrains-commit-manager.deleteChangelist",
+        "command": "git-manager.deleteChangelist",
         "title": "Delete Changelist",
         "category": "JetBrains Commit Manager",
         "icon": "$(trash)"
       },
       {
-        "command": "jetbrains-commit-manager.commitSelectedFiles",
+        "command": "git-manager.commitSelectedFiles",
         "title": "Commit Selected Files",
         "category": "JetBrains Commit Manager",
         "icon": "$(check)",
         "tooltip": "Select files to commit"
       },
       {
-        "command": "jetbrains-commit-manager.collapseAll",
+        "command": "git-manager.collapseAll",
         "title": "Collapse All",
         "category": "JetBrains Commit Manager",
         "icon": "$(collapse-all)"
       },
       {
-        "command": "jetbrains-commit-manager.moveFileToChangelist",
+        "command": "git-manager.moveFileToChangelist",
         "title": "Move File to Changelist",
         "category": "JetBrains Commit Manager"
       },
       {
-        "command": "jetbrains-commit-manager.toggleFileSelection",
+        "command": "git-manager.toggleFileSelection",
         "title": "Toggle File Selection",
         "category": "JetBrains Commit Manager"
       },
       {
-        "command": "jetbrains-commit-manager.refresh",
+        "command": "git-manager.refresh",
         "title": "Refresh",
         "category": "JetBrains Commit Manager",
         "icon": "$(sync)"
       },
       {
-        "command": "jetbrains-commit-manager.selectAllFiles",
+        "command": "git-manager.selectAllFiles",
         "title": "Select All Files",
         "category": "JetBrains Commit Manager"
       },
       {
-        "command": "jetbrains-commit-manager.deselectAllFiles",
+        "command": "git-manager.deselectAllFiles",
         "title": "Deselect All Files",
         "category": "JetBrains Commit Manager"
       },
       {
-        "command": "jetbrains-commit-manager.commitFromStatusBar",
+        "command": "git-manager.commitFromStatusBar",
         "title": "Commit from Status Bar",
         "category": "JetBrains Commit Manager"
       },
       {
-        "command": "jetbrains-commit-manager.updateCommitMessage",
+        "command": "git-manager.updateCommitMessage",
         "title": "Update Commit Message",
         "category": "JetBrains Commit Manager"
       },
       {
-        "command": "jetbrains-commit-manager.toggleAutoStage",
+        "command": "git-manager.toggleAutoStage",
         "title": "Toggle Auto-Stage Files",
         "category": "JetBrains Commit Manager",
         "icon": "$(sync)"
       },
       {
-        "command": "jetbrains-commit-manager.renameChangelist",
+        "command": "git-manager.renameChangelist",
         "title": "Rename Changelist",
         "category": "JetBrains Commit Manager",
         "icon": "$(edit)"
       },
       {
-        "command": "jetbrains-commit-manager.revertSelectedFiles",
+        "command": "git-manager.revertSelectedFiles",
         "title": "Revert Selected Files",
         "category": "JetBrains Commit Manager",
         "icon": "$(discard)"
       },
       {
-        "command": "jetbrains-commit-manager.revertFile",
+        "command": "git-manager.revertFile",
         "title": "Revert File",
         "category": "JetBrains Commit Manager",
         "icon": "$(discard)"
       },
       {
-        "command": "jetbrains-commit-manager.revertChangelist",
+        "command": "git-manager.revertChangelist",
         "title": "Revert Changelist",
         "category": "JetBrains Commit Manager",
         "icon": "$(discard)"
       },
       {
-        "command": "jetbrains-commit-manager.stashSelectedFiles",
+        "command": "git-manager.stashSelectedFiles",
         "title": "Stash Selected Files",
         "category": "JetBrains Commit Manager",
         "icon": "$(archive)",
         "tooltip": "Stash selected files"
       },
       {
-        "command": "jetbrains-commit-manager.openDiff",
+        "command": "git-manager.openDiff",
         "title": "Open Diff",
         "category": "JetBrains Commit Manager"
       },
       {
-        "command": "jetbrains-commit-manager.openFile",
+        "command": "git-manager.clearPersistedState",
+        "title": "Clear Persisted State",
+        "category": "JetBrains Commit Manager",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "git-manager.openFile",
         "title": "Open File",
         "category": "JetBrains Commit Manager"
       }
@@ -176,16 +183,16 @@
     "viewsContainers": {
       "activitybar": [
         {
-          "id": "jetbrains-commit-manager",
+          "id": "git-manager",
           "title": "Commit Manager",
           "icon": "resources/commit-manager-icon.svg"
         }
       ]
     },
     "views": {
-      "jetbrains-commit-manager": [
+      "git-manager": [
         {
-          "id": "jetbrains-commit-manager.changelists",
+          "id": "git-manager.changelists",
           "name": "Changelists",
           "when": "workspaceFolderCount > 0"
         }
@@ -194,60 +201,60 @@
     "menus": {
       "view/title": [
         {
-          "command": "jetbrains-commit-manager.commitSelectedFiles",
-          "when": "view == jetbrains-commit-manager.changelists && jetbrains-commit-manager.hasSelectedFiles",
+          "command": "git-manager.commitSelectedFiles",
+          "when": "view == git-manager.changelists && git-manager.hasSelectedFiles",
           "group": "navigation@1"
         },
         {
-          "command": "jetbrains-commit-manager.stashSelectedFiles",
-          "when": "view == jetbrains-commit-manager.changelists && jetbrains-commit-manager.hasSelectedFiles",
+          "command": "git-manager.stashSelectedFiles",
+          "when": "view == git-manager.changelists && git-manager.hasSelectedFiles",
           "group": "navigation@2"
         },
         {
-          "command": "jetbrains-commit-manager.refresh",
-          "when": "view == jetbrains-commit-manager.changelists",
+          "command": "git-manager.refresh",
+          "when": "view == git-manager.changelists",
           "group": "navigation@3"
         },
         {
-          "command": "jetbrains-commit-manager.revertSelectedFiles",
-          "when": "view == jetbrains-commit-manager.changelists",
+          "command": "git-manager.revertSelectedFiles",
+          "when": "view == git-manager.changelists",
           "group": "navigation@4"
         },
         {
-          "command": "jetbrains-commit-manager.createChangelist",
-          "when": "view == jetbrains-commit-manager.changelists",
+          "command": "git-manager.createChangelist",
+          "when": "view == git-manager.changelists",
           "group": "navigation@5"
         },
         {
           "when": "false",
-          "command": "jetbrains-commit-manager.collapseAll",
+          "command": "git-manager.collapseAll",
           "group": "navigation@6"
         }
       ],
       "view/item/context": [
         {
-          "command": "jetbrains-commit-manager.revertChangelist",
-          "when": "view == jetbrains-commit-manager.changelists && (viewItem == changelistNonEmpty || viewItem == defaultChangelistNonEmpty)",
+          "command": "git-manager.revertChangelist",
+          "when": "view == git-manager.changelists && (viewItem == changelistNonEmpty || viewItem == defaultChangelistNonEmpty)",
           "group": "2_modification"
         },
         {
-          "command": "jetbrains-commit-manager.renameChangelist",
-          "when": "view == jetbrains-commit-manager.changelists && viewItem == changelist",
+          "command": "git-manager.renameChangelist",
+          "when": "view == git-manager.changelists && viewItem == changelist",
           "group": "1_modification"
         },
         {
-          "command": "jetbrains-commit-manager.deleteChangelist",
-          "when": "view == jetbrains-commit-manager.changelists && viewItem == changelist && viewItem != defaultChangelist",
+          "command": "git-manager.deleteChangelist",
+          "when": "view == git-manager.changelists && viewItem == changelist && viewItem != defaultChangelist",
           "group": "2_modification"
         },
         {
-          "command": "jetbrains-commit-manager.revertFile",
-          "when": "view == jetbrains-commit-manager.changelists && viewItem == file",
+          "command": "git-manager.revertFile",
+          "when": "view == git-manager.changelists && viewItem == file",
           "group": "2_modification"
         },
         {
-          "command": "jetbrains-commit-manager.openFile",
-          "when": "view == jetbrains-commit-manager.changelists && viewItem == file",
+          "command": "git-manager.openFile",
+          "when": "view == git-manager.changelists && viewItem == file",
           "group": "navigation@2"
         }
       ]
@@ -256,7 +263,7 @@
   "configuration": {
     "title": "JetBrains Commit Manager",
     "properties": {
-      "jetbrains-commit-manager.autoStageFiles": {
+      "git-manager.autoStageFiles": {
         "type": "boolean",
         "default": true,
         "description": "Automatically stage modified files that are already tracked by Git (untracked files are not auto-staged)"
