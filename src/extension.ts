@@ -28,7 +28,7 @@ export async function activate(context: vscode.ExtensionContext) {
     await treeProvider.loadPersistedChangelists();
 
     // Create the tree view
-    treeView = vscode.window.createTreeView('jetbrains-commit-manager.changelists', {
+    treeView = vscode.window.createTreeView('git-manager.changelists', {
       treeDataProvider: treeProvider,
       showCollapseAll: true,
       canSelectMany: true,
@@ -121,20 +121,20 @@ export async function activate(context: vscode.ExtensionContext) {
   function updateCommitButtonContext() {
     const selectedFiles = treeProvider.getSelectedFiles();
     const hasSelectedFiles = selectedFiles.length > 0;
-    vscode.commands.executeCommand('setContext', 'jetbrains-commit-manager.hasSelectedFiles', hasSelectedFiles);
+    vscode.commands.executeCommand('setContext', 'git-manager.hasSelectedFiles', hasSelectedFiles);
   }
 
   // Register commands
   const commands = [
-    vscode.commands.registerCommand('jetbrains-commit-manager.open', () => {
+    vscode.commands.registerCommand('git-manager.open', () => {
       if (treeView) {
         // Focus on the tree view
-        vscode.commands.executeCommand('jetbrains-commit-manager.changelists.focus');
+        vscode.commands.executeCommand('git-manager.changelists.focus');
       }
     }),
 
     // Open a diff for a file from the tree
-    vscode.commands.registerCommand('jetbrains-commit-manager.openDiff', async (uri: vscode.Uri) => {
+    vscode.commands.registerCommand('git-manager.openDiff', async (uri: vscode.Uri) => {
       try {
         // Build a proper git-scheme URI with JSON query as expected by Git extension
         const left = vscode.Uri.from({
@@ -155,7 +155,7 @@ export async function activate(context: vscode.ExtensionContext) {
     }),
 
     // Open the source file from a file item context menu
-    vscode.commands.registerCommand('jetbrains-commit-manager.openFile', async (arg?: any) => {
+    vscode.commands.registerCommand('git-manager.openFile', async (arg?: any) => {
       try {
         let targetUri: vscode.Uri | undefined;
         if (arg && arg.resourceUri) {
@@ -179,7 +179,7 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     }),
 
-    vscode.commands.registerCommand('jetbrains-commit-manager.createChangelist', async () => {
+    vscode.commands.registerCommand('git-manager.createChangelist', async () => {
       const name = await vscode.window.showInputBox({
         prompt: 'Enter changelist name',
         placeHolder: 'e.g., Feature X',
@@ -201,7 +201,7 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     }),
 
-    vscode.commands.registerCommand('jetbrains-commit-manager.deleteChangelist', async (changelistItem?: any) => {
+    vscode.commands.registerCommand('git-manager.deleteChangelist', async (changelistItem?: any) => {
       let changelistId: string;
       let changelistName: string;
 
@@ -243,7 +243,7 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     }),
 
-    vscode.commands.registerCommand('jetbrains-commit-manager.renameChangelist', async (changelistItem?: any) => {
+    vscode.commands.registerCommand('git-manager.renameChangelist', async (changelistItem?: any) => {
       let changelistId: string;
       let currentName: string;
 
@@ -298,7 +298,7 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     }),
 
-    vscode.commands.registerCommand('jetbrains-commit-manager.commitSelectedFiles', async () => {
+    vscode.commands.registerCommand('git-manager.commitSelectedFiles', async () => {
       const selectedFiles = treeProvider.getSelectedFiles();
 
       if (selectedFiles.length === 0) {
@@ -349,7 +349,7 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     }),
 
-    vscode.commands.registerCommand('jetbrains-commit-manager.stashSelectedFiles', async () => {
+    vscode.commands.registerCommand('git-manager.stashSelectedFiles', async () => {
       const selectedFiles = treeProvider.getSelectedFiles();
 
       if (selectedFiles.length === 0) {
@@ -397,7 +397,7 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     }),
 
-    vscode.commands.registerCommand('jetbrains-commit-manager.moveFileToChangelist', async (fileId?: string) => {
+    vscode.commands.registerCommand('git-manager.moveFileToChangelist', async (fileId?: string) => {
       let filesToMove: FileItem[] = [];
 
       if (fileId) {
@@ -434,28 +434,28 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     }),
 
-    vscode.commands.registerCommand('jetbrains-commit-manager.toggleFileSelection', (fileId: string) => {
+    vscode.commands.registerCommand('git-manager.toggleFileSelection', (fileId: string) => {
       treeProvider.toggleFileSelection(fileId);
       treeProvider.refresh();
       updateAllCommitUI();
       updateCommitButtonContext();
     }),
 
-    vscode.commands.registerCommand('jetbrains-commit-manager.refresh', () => {
+    vscode.commands.registerCommand('git-manager.refresh', () => {
       treeProvider.refresh();
       updateAllCommitUI();
     }),
 
     // Removed expandAll command
 
-    vscode.commands.registerCommand('jetbrains-commit-manager.collapseAll', () => {
+    vscode.commands.registerCommand('git-manager.collapseAll', () => {
       if (treeProvider) {
         treeProvider.collapseAll();
         isExpanded = false;
       }
     }),
 
-    vscode.commands.registerCommand('jetbrains-commit-manager.revertSelectedFiles', async () => {
+    vscode.commands.registerCommand('git-manager.revertSelectedFiles', async () => {
       const selectedFiles = treeProvider.getSelectedFiles();
 
       if (selectedFiles.length === 0) {
@@ -484,7 +484,7 @@ export async function activate(context: vscode.ExtensionContext) {
     }),
 
     // Revert a single file from context menu
-    vscode.commands.registerCommand('jetbrains-commit-manager.revertFile', async (arg?: any) => {
+    vscode.commands.registerCommand('git-manager.revertFile', async (arg?: any) => {
       let fileToRevert: FileItem | undefined;
       const allFiles = treeProvider.getAllFiles();
 
@@ -522,7 +522,7 @@ export async function activate(context: vscode.ExtensionContext) {
     }),
 
     // Revert all files in a changelist from context menu
-    vscode.commands.registerCommand('jetbrains-commit-manager.revertChangelist', async (changelistItem?: any) => {
+    vscode.commands.registerCommand('git-manager.revertChangelist', async (changelistItem?: any) => {
       if (!changelistItem || !changelistItem.changelist) {
         return;
       }
@@ -552,14 +552,14 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     }),
 
-    vscode.commands.registerCommand('jetbrains-commit-manager.selectAllFiles', () => {
+    vscode.commands.registerCommand('git-manager.selectAllFiles', () => {
       treeProvider.selectAllFiles();
       treeProvider.refresh();
       updateAllCommitUI();
       updateCommitButtonContext();
     }),
 
-    vscode.commands.registerCommand('jetbrains-commit-manager.deselectAllFiles', () => {
+    vscode.commands.registerCommand('git-manager.deselectAllFiles', () => {
       treeProvider.deselectAllFiles();
       treeProvider.refresh();
       updateAllCommitUI();
@@ -567,7 +567,7 @@ export async function activate(context: vscode.ExtensionContext) {
     }),
 
     // New command for status bar commit button
-    vscode.commands.registerCommand('jetbrains-commit-manager.commitFromStatusBar', async () => {
+    vscode.commands.registerCommand('git-manager.commitFromStatusBar', async () => {
       const selectedFiles = treeProvider.getSelectedFiles();
 
       if (selectedFiles.length === 0) {
@@ -623,7 +623,7 @@ export async function activate(context: vscode.ExtensionContext) {
     }),
 
     // New command for status bar stash button
-    vscode.commands.registerCommand('jetbrains-commit-manager.stashFromStatusBar', async () => {
+    vscode.commands.registerCommand('git-manager.stashFromStatusBar', async () => {
       const selectedFiles = treeProvider.getSelectedFiles();
 
       if (selectedFiles.length === 0) {
@@ -675,7 +675,7 @@ export async function activate(context: vscode.ExtensionContext) {
     }),
 
     // Command to update commit message in status bar
-    vscode.commands.registerCommand('jetbrains-commit-manager.updateCommitMessage', async () => {
+    vscode.commands.registerCommand('git-manager.updateCommitMessage', async () => {
       const message = await vscode.window.showInputBox({
         prompt: 'Enter commit message',
         placeHolder: 'Describe your changes...',
@@ -688,8 +688,8 @@ export async function activate(context: vscode.ExtensionContext) {
     }),
 
     // Command to toggle auto-stage feature
-    vscode.commands.registerCommand('jetbrains-commit-manager.toggleAutoStage', async () => {
-      const config = vscode.workspace.getConfiguration('jetbrains-commit-manager');
+    vscode.commands.registerCommand('git-manager.toggleAutoStage', async () => {
+      const config = vscode.workspace.getConfiguration('git-manager');
       const currentValue = config.get<boolean>('autoStageFiles', true);
       const newValue = !currentValue;
 
@@ -700,8 +700,26 @@ export async function activate(context: vscode.ExtensionContext) {
     }),
 
     // Test command to verify extension is working
-    vscode.commands.registerCommand('jetbrains-commit-manager.test', () => {
+    vscode.commands.registerCommand('git-manager.test', () => {
       vscode.window.showInformationMessage('JetBrains Commit Manager extension is working!');
+    }),
+
+    // Command to clear persisted state (useful for fixing corrupted state)
+    vscode.commands.registerCommand('git-manager.clearPersistedState', async () => {
+      const confirmed = await vscode.window.showWarningMessage(
+        'This will clear all persisted changelists and file assignments. This action cannot be undone.',
+        { modal: true },
+        'Clear All Data'
+      );
+
+      if (confirmed === 'Clear All Data') {
+        try {
+          await treeProvider.clearPersistedState();
+          vscode.window.showInformationMessage('Persisted state cleared successfully. The extension will now use fresh data.');
+        } catch (error) {
+          vscode.window.showErrorMessage(`Failed to clear persisted state: ${error}`);
+        }
+      }
     }),
   ];
 
@@ -721,7 +739,7 @@ export async function activate(context: vscode.ExtensionContext) {
   fileSystemWatcher.onDidChange(async (uri) => {
     if (treeProvider) {
       // Auto-stage the changed file if the feature is enabled
-      const config = vscode.workspace.getConfiguration('jetbrains-commit-manager');
+      const config = vscode.workspace.getConfiguration('git-manager');
       const autoStageEnabled = config.get<boolean>('autoStageFiles', true);
 
       if (autoStageEnabled && gitService) {
@@ -752,7 +770,7 @@ export async function activate(context: vscode.ExtensionContext) {
   fileSystemWatcher.onDidCreate(async (uri) => {
     if (treeProvider) {
       // Auto-stage the new file if the feature is enabled
-      const config = vscode.workspace.getConfiguration('jetbrains-commit-manager');
+      const config = vscode.workspace.getConfiguration('git-manager');
       const autoStageEnabled = config.get<boolean>('autoStageFiles', true);
 
       if (autoStageEnabled && gitService) {
@@ -793,13 +811,13 @@ export async function activate(context: vscode.ExtensionContext) {
 function createCommitStatusBarItems() {
   // Create commit button in status bar
   commitStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-  commitStatusBarItem.command = 'jetbrains-commit-manager.commitFromStatusBar';
+  commitStatusBarItem.command = 'git-manager.commitFromStatusBar';
   commitStatusBarItem.tooltip = 'Commit selected files';
   commitStatusBarItem.show();
 
   // Create commit message input in status bar
   commitMessageInput = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 101);
-  commitMessageInput.command = 'jetbrains-commit-manager.updateCommitMessage';
+  commitMessageInput.command = 'git-manager.updateCommitMessage';
   commitMessageInput.tooltip = 'Click to edit commit message';
   commitMessageInput.text = '📝 ';
   commitMessageInput.show();

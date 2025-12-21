@@ -60,7 +60,7 @@ export class FileTreeItem extends vscode.TreeItem {
 
     // Add command to open diff on click
     this.command = {
-      command: 'jetbrains-commit-manager.openDiff',
+      command: 'git-manager.openDiff',
       title: 'Open Diff',
       arguments: [this.resourceUri],
     };
@@ -120,12 +120,12 @@ export class NativeTreeProvider
 
   // Drag and drop support
   readonly dropMimeTypes = [
-    'application/vnd.code.tree.jetbrains-commit-manager',
-    'application/vnd.code.tree.jetbrains-commit-manager.changelist',
+    'application/vnd.code.tree.git-manager',
+    'application/vnd.code.tree.git-manager.changelist',
   ];
   readonly dragMimeTypes = [
-    'application/vnd.code.tree.jetbrains-commit-manager',
-    'application/vnd.code.tree.jetbrains-commit-manager.changelist',
+    'application/vnd.code.tree.git-manager',
+    'application/vnd.code.tree.git-manager.changelist',
   ];
 
   private changelists: Changelist[] = [];
@@ -187,6 +187,18 @@ export class NativeTreeProvider
       console.error('Error loading persisted changelists:', error);
       // Fallback to default if loading fails
       this.initializeDefaultChangelist();
+    }
+  }
+
+  async clearPersistedState(): Promise<void> {
+    try {
+      await this.context.workspaceState.update('changelists', undefined);
+      // Reset to default changelist
+      this.initializeDefaultChangelist();
+      this.refresh();
+    } catch (error) {
+      console.error('Error clearing persisted state:', error);
+      throw error;
     }
   }
 
@@ -967,12 +979,12 @@ export class NativeTreeProvider
     }
 
     if (fileIds.length > 0) {
-      dataTransfer.set('application/vnd.code.tree.jetbrains-commit-manager', new vscode.DataTransferItem(fileIds));
+      dataTransfer.set('application/vnd.code.tree.git-manager', new vscode.DataTransferItem(fileIds));
     }
 
     if (changelistIds.length > 0) {
       dataTransfer.set(
-        'application/vnd.code.tree.jetbrains-commit-manager.changelist',
+        'application/vnd.code.tree.git-manager.changelist',
         new vscode.DataTransferItem(changelistIds)
       );
     }
@@ -990,7 +1002,7 @@ export class NativeTreeProvider
     // Check if dropping on unversioned files section
     if (target instanceof UnversionedSectionTreeItem) {
       // Handle file drops to unversioned section (unstaging)
-      const fileTransferItem = dataTransfer.get('application/vnd.code.tree.jetbrains-commit-manager');
+      const fileTransferItem = dataTransfer.get('application/vnd.code.tree.git-manager');
       if (fileTransferItem) {
         try {
           const fileIds = fileTransferItem.value as string[];
@@ -1021,7 +1033,7 @@ export class NativeTreeProvider
     }
 
     // Handle file drops
-    const fileTransferItem = dataTransfer.get('application/vnd.code.tree.jetbrains-commit-manager');
+    const fileTransferItem = dataTransfer.get('application/vnd.code.tree.git-manager');
     if (fileTransferItem) {
       try {
         const fileIds = fileTransferItem.value as string[];
@@ -1037,7 +1049,7 @@ export class NativeTreeProvider
     }
 
     // Handle changelist drops
-    const changelistTransferItem = dataTransfer.get('application/vnd.code.tree.jetbrains-commit-manager.changelist');
+    const changelistTransferItem = dataTransfer.get('application/vnd.code.tree.git-manager.changelist');
     if (changelistTransferItem) {
       try {
         const changelistIds = changelistTransferItem.value as string[];
