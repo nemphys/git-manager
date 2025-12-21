@@ -44,6 +44,7 @@
     "onCommand:git-manager.updateCommitMessage",
     "onCommand:git-manager.toggleAutoStage",
     "onCommand:git-manager.renameChangelist",
+    "onCommand:git-manager.setActiveChangelist",
     "onCommand:git-manager.revertSelectedFiles",
     "onCommand:git-manager.revertFile",
     "onCommand:git-manager.revertChangelist",
@@ -139,6 +140,12 @@
         "title": "Rename Changelist",
         "category": "JetBrains Commit Manager",
         "icon": "$(edit)"
+      },
+      {
+        "command": "git-manager.setActiveChangelist",
+        "title": "Set as Active Changelist",
+        "category": "JetBrains Commit Manager",
+        "icon": "$(star)"
       },
       {
         "command": "git-manager.revertSelectedFiles",
@@ -254,6 +261,11 @@
         {
           "command": "git-manager.renameChangelist",
           "when": "view == git-manager.changelists && viewItem == changelist",
+          "group": "1_modification"
+        },
+        {
+          "command": "git-manager.setActiveChangelist",
+          "when": "view == git-manager.changelists && (viewItem == changelist || viewItem == changelistNonEmpty || viewItem == defaultChangelist || viewItem == defaultChangelistNonEmpty) && viewItem != changelistActive && viewItem != changelistNonEmptyActive && viewItem != defaultChangelistActive && viewItem != defaultChangelistNonEmptyActive",
           "group": "1_modification"
         },
         {

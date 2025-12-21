@@ -59,4 +59,5 @@ export interface PersistedChangelist {
 export interface PersistedState {
   changelists: PersistedChangelist[];
   fileAssignments: { [filePath: string]: string }; // file path → changelist ID
+  activeChangelistId?: string; // ID of the active changelist
 }

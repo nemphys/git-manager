@@ -424,6 +424,46 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     }),
 
+    vscode.commands.registerCommand('git-manager.setActiveChangelist', async (changelistItem?: any) => {
+      let changelistId: string;
+
+      if (changelistItem && changelistItem.changelist) {
+        // Called from inline context menu - changelistItem is a ChangelistTreeItem
+        changelistId = changelistItem.changelist.id;
+      } else {
+        // Called from command palette or other places - show selection dialog
+        const changelists = treeProvider.getChangelists();
+        if (changelists.length === 0) {
+          vscode.window.showInformationMessage('No changelists available.');
+          return;
+        }
+
+        const options = changelists.map((c) => ({ 
+          label: c.name, 
+          value: c.id,
+          description: c.id === treeProvider.getActiveChangelistId() ? 'Active' : undefined
+        }));
+        const selected = await vscode.window.showQuickPick(options, {
+          placeHolder: 'Select changelist to set as active',
+        });
+
+        if (!selected) {
+          return;
+        }
+
+        changelistId = selected.value;
+      }
+
+      try {
+        await treeProvider.setActiveChangelist(changelistId);
+        const changelist = treeProvider.getChangelists().find((c) => c.id === changelistId);
+        vscode.window.showInformationMessage(`Active changelist set to "${changelist?.name || changelistId}"`);
+        treeProvider.refresh();
+      } catch (error) {
+        vscode.window.showErrorMessage(`Failed to set active changelist: ${error}`);
+      }
+    }),
+
     vscode.commands.registerCommand('git-manager.commitSelectedFiles', async () => {
       const selectedFiles = treeProvider.getSelectedFiles();
 

@@ -4,17 +4,32 @@ import { Changelist, FileItem, FileStatus } from './types';
 import { GitService } from './gitService';
 
 export class ChangelistTreeItem extends vscode.TreeItem {
-  constructor(public readonly changelist: Changelist, public readonly collapsibleState: vscode.TreeItemCollapsibleState) {
+  constructor(public readonly changelist: Changelist, public readonly collapsibleState: vscode.TreeItemCollapsibleState, public readonly isActive: boolean = false) {
     super(changelist.name, collapsibleState);
     this.tooltip = changelist.description || changelist.name;
     this.description = `${changelist.files.length} files`;
     // Distinguish empty vs non-empty changelists for context menus
+    // Also distinguish active vs non-active for context menus
     if (changelist.isDefault) {
-      this.contextValue = changelist.files.length > 0 ? 'defaultChangelistNonEmpty' : 'defaultChangelist';
+      if (isActive) {
+        this.contextValue = changelist.files.length > 0 ? 'defaultChangelistNonEmptyActive' : 'defaultChangelistActive';
+      } else {
+        this.contextValue = changelist.files.length > 0 ? 'defaultChangelistNonEmpty' : 'defaultChangelist';
+      }
     } else {
-      this.contextValue = changelist.files.length > 0 ? 'changelistNonEmpty' : 'changelist';
+      if (isActive) {
+        this.contextValue = changelist.files.length > 0 ? 'changelistNonEmptyActive' : 'changelistActive';
+      } else {
+        this.contextValue = changelist.files.length > 0 ? 'changelistNonEmpty' : 'changelist';
+      }
     }
     this.iconPath = undefined; // Remove prefix icons from changelists
+
+    // Display active changelist with a visual indicator (VS Code doesn't support bold text in tree items)
+    if (isActive) {
+      // Add "(active)" suffix to indicate active status
+      this.label = `${changelist.name} (active)`;
+    }
 
     // Add checkbox support for changelist selection
     this.updateCheckboxState();
@@ -145,6 +160,7 @@ export class NativeTreeProvider
   private isRefreshing: boolean = false;
   private recentMoves: Map<string, { target: 'changelist' | 'unversioned'; changelistId?: string; timestamp: number }> = new Map(); // Track recent file moves to prevent overwriting
   private lastMoveTime: number = 0; // Track when last move happened to debounce refreshes
+  private activeChangelistId: string | undefined; // ID of the currently active changelist
 
   constructor(workspaceRoot: string, context: vscode.ExtensionContext) {
     this.workspaceRoot = workspaceRoot;
@@ -164,6 +180,10 @@ export class NativeTreeProvider
       createdAt: new Date(),
     };
     this.changelists = [defaultChangelist];
+    // Set default changelist as active if no active changelist is set
+    if (!this.activeChangelistId) {
+      this.activeChangelistId = defaultChangelist.id;
+    }
   }
 
   async loadPersistedChangelists(): Promise<void> {
@@ -187,14 +207,36 @@ export class NativeTreeProvider
         if (!hasDefault) {
           this.initializeDefaultChangelist();
         }
+
+        // Restore active changelist ID, or default to the default changelist
+        if (persistedState.activeChangelistId) {
+          // Verify the active changelist still exists
+          const activeChangelist = this.changelists.find((c) => c.id === persistedState.activeChangelistId);
+          if (activeChangelist) {
+            this.activeChangelistId = persistedState.activeChangelistId;
+          } else {
+            // Active changelist was deleted, default to default changelist
+            const defaultChangelist = this.changelists.find((c) => c.isDefault);
+            this.activeChangelistId = defaultChangelist?.id;
+          }
+        } else {
+          // No active changelist persisted, default to default changelist
+          const defaultChangelist = this.changelists.find((c) => c.isDefault);
+          this.activeChangelistId = defaultChangelist?.id;
+        }
       } else {
         // No persisted state, initialize default
         this.initializeDefaultChangelist();
+        // Set default changelist as active
+        const defaultChangelist = this.changelists.find((c) => c.isDefault);
+        this.activeChangelistId = defaultChangelist?.id;
       }
     } catch (error) {
       console.error('Error loading persisted changelists:', error);
       // Fallback to default if loading fails
       this.initializeDefaultChangelist();
+      const defaultChangelist = this.changelists.find((c) => c.isDefault);
+      this.activeChangelistId = defaultChangelist?.id;
     }
   }
 
@@ -237,6 +279,7 @@ export class NativeTreeProvider
       const persistedState: import('./types').PersistedState = {
         changelists: persistedChangelists,
         fileAssignments,
+        activeChangelistId: this.activeChangelistId,
       };
 
       await this.context.workspaceState.update('changelists', persistedState);
@@ -417,12 +460,14 @@ export class NativeTreeProvider
               addedFileIds.add(file.id);
             }
           } else {
-            // New file - add to default changelist
-            const defaultChangelist = this.changelists.find((c) => c.isDefault);
-            if (defaultChangelist) {
-              file.changelistId = defaultChangelist.id;
-              defaultChangelist.files.push(file);
-              this.sortChangelistFiles(defaultChangelist);
+            // New file - add to active changelist (or default if no active is set)
+            const targetChangelist = this.activeChangelistId 
+              ? this.changelists.find((c) => c.id === this.activeChangelistId)
+              : this.changelists.find((c) => c.isDefault);
+            if (targetChangelist) {
+              file.changelistId = targetChangelist.id;
+              targetChangelist.files.push(file);
+              this.sortChangelistFiles(targetChangelist);
               addedFileIds.add(file.id);
             }
           }
@@ -507,8 +552,25 @@ export class NativeTreeProvider
       // Root level - return only changelists and unversioned files section
       const items: vscode.TreeItem[] = [];
 
+      // Sort changelists: active first, then others sorted ascending by name
+      const sortedChangelists = [...this.changelists].sort((a, b) => {
+        const aIsActive = a.id === this.activeChangelistId;
+        const bIsActive = b.id === this.activeChangelistId;
+        
+        // Active changelist always comes first
+        if (aIsActive && !bIsActive) return -1;
+        if (!aIsActive && bIsActive) return 1;
+        
+        // For non-active changelists, sort by name ascending
+        if (!aIsActive && !bIsActive) {
+          return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+        }
+        
+        return 0;
+      });
+
       // Add changelists
-      this.changelists.forEach((changelist) => {
+      sortedChangelists.forEach((changelist) => {
         let collapsibleState: vscode.TreeItemCollapsibleState;
 
         if (changelist.files.length === 0) {
@@ -522,7 +584,8 @@ export class NativeTreeProvider
           collapsibleState = vscode.TreeItemCollapsibleState.Expanded;
         }
 
-        items.push(new ChangelistTreeItem(changelist, collapsibleState));
+        const isActive = changelist.id === this.activeChangelistId;
+        items.push(new ChangelistTreeItem(changelist, collapsibleState, isActive));
       });
 
       // Add unversioned files section if there are any
@@ -594,11 +657,19 @@ export class NativeTreeProvider
       return;
     }
 
-    // Move files to default changelist
-    const defaultChangelist = this.changelists.find((c) => c.isDefault);
-    if (defaultChangelist && changelist.files.length > 0) {
-      defaultChangelist.files.push(...changelist.files);
-      this.sortChangelistFiles(defaultChangelist);
+    // If deleting the active changelist, switch to default
+    if (this.activeChangelistId === changelistId) {
+      const defaultChangelist = this.changelists.find((c) => c.isDefault);
+      this.activeChangelistId = defaultChangelist?.id;
+    }
+
+    // Move files to active changelist (or default if no active is set)
+    const targetChangelist = this.activeChangelistId 
+      ? this.changelists.find((c) => c.id === this.activeChangelistId)
+      : this.changelists.find((c) => c.isDefault);
+    if (targetChangelist && changelist.files.length > 0) {
+      targetChangelist.files.push(...changelist.files);
+      this.sortChangelistFiles(targetChangelist);
     }
 
     this.changelists = this.changelists.filter((c) => c.id !== changelistId);
@@ -629,6 +700,25 @@ export class NativeTreeProvider
 
     // Persist changelists asynchronously (non-blocking)
     this.saveChangelistsAsync();
+  }
+
+  async setActiveChangelist(changelistId: string): Promise<void> {
+    const changelist = this.changelists.find((c) => c.id === changelistId);
+    if (!changelist) {
+      return;
+    }
+
+    this.activeChangelistId = changelistId;
+    
+    // Fire tree data change to update UI immediately
+    this._onDidChangeTreeData.fire();
+
+    // Persist changelists asynchronously (non-blocking)
+    this.saveChangelistsAsync();
+  }
+
+  getActiveChangelistId(): string | undefined {
+    return this.activeChangelistId;
   }
 
   async moveChangelistFiles(sourceChangelistId: string, targetChangelistId: string): Promise<void> {
@@ -933,7 +1023,8 @@ export class NativeTreeProvider
         collapsibleState = vscode.TreeItemCollapsibleState.Expanded;
       }
 
-      const treeItem = new ChangelistTreeItem(changelist, collapsibleState);
+      const isActive = changelist.id === this.activeChangelistId;
+      const treeItem = new ChangelistTreeItem(changelist, collapsibleState, isActive);
       return treeItem;
     });
   }
@@ -956,7 +1047,8 @@ export class NativeTreeProvider
       collapsibleState = vscode.TreeItemCollapsibleState.Expanded;
     }
 
-    return new ChangelistTreeItem(changelist, collapsibleState);
+    const isActive = changelist.id === this.activeChangelistId;
+    return new ChangelistTreeItem(changelist, collapsibleState, isActive);
   }
 
   getUnversionedFiles(): FileItem[] {
