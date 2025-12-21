@@ -22,10 +22,38 @@ export class GitService {
         .filter((line) => line.length > 0);
 
       for (const line of lines) {
+        // Git status --porcelain format is always "XY path" where:
+        // - Positions 0-1: status code (2 characters, can include spaces)
+        // - Position 2: space separator (always present)
+        // - Position 3+: file path
+        // The path always starts at position 3
         const status = line.substring(0, 2);
-        // More robust path extraction - find the first space after the status and take everything after it
-        const spaceIndex = line.indexOf(' ', 2);
-        const path = spaceIndex !== -1 ? line.substring(spaceIndex + 1) : line.substring(3);
+        let path: string;
+        
+        if (status[0] === 'R' || status[1] === 'R') {
+          // For renamed files, format is "R  oldpath -> newpath"
+          // Path part starts at position 3
+          const pathPart = line.substring(3);
+          // Extract the new path (after " -> ")
+          const arrowIndex = pathPart.indexOf(' -> ');
+          path = arrowIndex !== -1 ? pathPart.substring(arrowIndex + 4) : pathPart;
+        } else {
+          // For all other statuses, path starts at position 3 (after "XY ")
+          // However, we need to handle edge cases where the format might be slightly different
+          // Check if position 2 is a space (standard format)
+          if (line.length > 2 && line[2] === ' ') {
+            path = line.substring(3);
+          } else {
+            // Fallback: find the first space after position 1 and take everything after it
+            const spaceIndex = line.indexOf(' ', 1);
+            if (spaceIndex !== -1) {
+              path = line.substring(spaceIndex + 1);
+            } else {
+              // Last resort: assume path starts at position 2
+              path = line.substring(2);
+            }
+          }
+        }
 
         const fileItem: FileItem = {
           id: this.generateFileId(path),
