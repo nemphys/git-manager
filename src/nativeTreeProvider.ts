@@ -48,7 +48,15 @@ export class FileTreeItem extends vscode.TreeItem {
     super(file.name, vscode.TreeItemCollapsibleState.None);
     this.tooltip = file.path;
     this.description = file.path; // Show relative project path instead of status
-    this.contextValue = 'file';
+    // Use different context values:
+    // - stagedFile: file in changelist and staged (green)
+    // - unstagedFile: file in changelist but unstaged (red)
+    // - file: file in unversioned section
+    if (changelistId) {
+      this.contextValue = file.isStaged ? 'stagedFile' : 'unstagedFile';
+    } else {
+      this.contextValue = 'file';
+    }
     this.iconPath = undefined; // Remove prefix icons
 
     // Resolve the file path relative to workspace root

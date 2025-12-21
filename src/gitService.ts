@@ -55,6 +55,9 @@ export class GitService {
           }
         }
 
+        // Determine if file is staged (first char is not space)
+        const isStaged = status[0] !== ' ' && status[0] !== '?';
+
         const fileItem: FileItem = {
           id: this.generateFileId(path),
           path: path,
@@ -62,6 +65,7 @@ export class GitService {
           status: this.parseStatus(status),
           isSelected: false,
           relativePath: path,
+          isStaged: isStaged,
         };
 
         files.push(fileItem);
@@ -190,7 +194,13 @@ export class GitService {
 
   async unstageFile(filePath: string): Promise<boolean> {
     try {
-      await this.executeGitCommand(['reset', 'HEAD', '--', filePath]);
+      // Use git restore --staged (modern approach) or fallback to reset HEAD
+      try {
+        await this.executeGitCommand(['restore', '--staged', '--', filePath]);
+      } catch (error) {
+        // Fallback to reset HEAD for older git versions
+        await this.executeGitCommand(['reset', 'HEAD', '--', filePath]);
+      }
       return true;
     } catch (error) {
       console.error('Error unstaging file:', error);

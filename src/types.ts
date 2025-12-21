@@ -16,6 +16,7 @@ export interface FileItem {
   isSelected: boolean;
   changelistId?: string;
   relativePath: string;
+  isStaged?: boolean; // Whether the file is staged (in index)
 }
 
 export enum FileStatus {

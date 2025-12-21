@@ -48,6 +48,8 @@
     "onCommand:git-manager.revertFile",
     "onCommand:git-manager.revertChangelist",
     "onCommand:git-manager.stashSelectedFiles",
+    "onCommand:git-manager.unstageFile",
+    "onCommand:git-manager.untrackFile",
     "onCommand:git-manager.openDiff",
     "onCommand:git-manager.openFile",
     "onCommand:git-manager.clearPersistedState"
@@ -157,6 +159,18 @@
         "icon": "$(discard)"
       },
       {
+        "command": "git-manager.unstageFile",
+        "title": "Unstage File",
+        "category": "JetBrains Commit Manager",
+        "icon": "$(remove)"
+      },
+      {
+        "command": "git-manager.untrackFile",
+        "title": "Untrack File",
+        "category": "JetBrains Commit Manager",
+        "icon": "$(close)"
+      },
+      {
         "command": "git-manager.stashSelectedFiles",
         "title": "Stash Selected Files",
         "category": "JetBrains Commit Manager",
@@ -249,12 +263,22 @@
         },
         {
           "command": "git-manager.revertFile",
-          "when": "view == git-manager.changelists && viewItem == file",
+          "when": "view == git-manager.changelists && (viewItem == file || viewItem == stagedFile || viewItem == unstagedFile)",
           "group": "2_modification"
         },
         {
+          "command": "git-manager.unstageFile",
+          "when": "view == git-manager.changelists && viewItem == stagedFile",
+          "group": "1_modification"
+        },
+        {
+          "command": "git-manager.untrackFile",
+          "when": "view == git-manager.changelists && (viewItem == stagedFile || viewItem == unstagedFile)",
+          "group": "1_modification"
+        },
+        {
           "command": "git-manager.openFile",
-          "when": "view == git-manager.changelists && viewItem == file",
+          "when": "view == git-manager.changelists && (viewItem == file || viewItem == stagedFile || viewItem == unstagedFile)",
           "group": "navigation@2"
         }
       ]

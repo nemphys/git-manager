@@ -552,6 +552,92 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     }),
 
+    // Untrack a file (move to unversioned section)
+    vscode.commands.registerCommand('git-manager.untrackFile', async (arg?: any) => {
+      let fileToUntrack: FileItem | undefined;
+      const allFiles = treeProvider.getAllFiles();
+
+      if (typeof arg === 'string') {
+        fileToUntrack = allFiles.find((f) => f.id === arg);
+      } else if (arg && arg.file) {
+        // Invoked from context menu: arg is FileTreeItem
+        fileToUntrack = arg.file as FileItem;
+      } else if (arg && arg.resourceUri) {
+        const fsPath: string = arg.resourceUri.fsPath as string;
+        // match by path tail relative path presence
+        fileToUntrack = allFiles.find((f) => fsPath.endsWith(f.path));
+      }
+      if (!fileToUntrack) {
+        vscode.window.showWarningMessage('No file selected to untrack.');
+        return;
+      }
+
+      // Check if file is in a changelist
+      if (!fileToUntrack.changelistId) {
+        vscode.window.showInformationMessage(`File "${fileToUntrack.name}" is not in a changelist.`);
+        return;
+      }
+
+      try {
+        // Use moveFileToUnversioned which handles unstaging and moving to unversioned section
+        await treeProvider.moveFileToUnversioned(fileToUntrack.id);
+        vscode.window.showInformationMessage(`Untracked ${fileToUntrack.name}`);
+        updateAllCommitUI();
+        updateCommitButtonContext();
+      } catch (error) {
+        vscode.window.showErrorMessage(`Failed to untrack file: ${error}`);
+      }
+    }),
+
+    // Unstage a file (keep in changelist, just unstage from index)
+    vscode.commands.registerCommand('git-manager.unstageFile', async (arg?: any) => {
+      let fileToUnstage: FileItem | undefined;
+      const allFiles = treeProvider.getAllFiles();
+
+      if (typeof arg === 'string') {
+        fileToUnstage = allFiles.find((f) => f.id === arg);
+      } else if (arg && arg.file) {
+        // Invoked from context menu: arg is FileTreeItem
+        fileToUnstage = arg.file as FileItem;
+      } else if (arg && arg.resourceUri) {
+        const fsPath: string = arg.resourceUri.fsPath as string;
+        // match by path tail relative path presence
+        fileToUnstage = allFiles.find((f) => fsPath.endsWith(f.path));
+      }
+      if (!fileToUnstage) {
+        vscode.window.showWarningMessage('No file selected to unstage.');
+        return;
+      }
+
+      // Check if file is staged
+      if (!fileToUnstage.isStaged) {
+        vscode.window.showInformationMessage(`File "${fileToUnstage.name}" is not staged.`);
+        return;
+      }
+
+      // Check if file is in a changelist
+      if (!fileToUnstage.changelistId) {
+        vscode.window.showInformationMessage(`File "${fileToUnstage.name}" is not in a changelist.`);
+        return;
+      }
+
+      try {
+        // Unstage the file (git restore --staged)
+        const success = await gitService.unstageFile(fileToUnstage.path);
+        if (success) {
+          vscode.window.showInformationMessage(`Unstaged ${fileToUnstage.name}`);
+          // Refresh to update the file's staged status
+          treeProvider.refresh();
+          updateAllCommitUI();
+          updateCommitButtonContext();
+        } else {
+          vscode.window.showErrorMessage(`Failed to unstage ${fileToUnstage.name}`);
+        }
+      } catch (error) {
+        vscode.window.showErrorMessage(`Failed to unstage file: ${error}`);
+      }
+    }),
+
     vscode.commands.registerCommand('git-manager.selectAllFiles', () => {
       treeProvider.selectAllFiles();
       treeProvider.refresh();
