@@ -3,8 +3,11 @@
 import * as vscode from 'vscode';
 import { NativeTreeProvider, ChangelistTreeItem } from './nativeTreeProvider';
 import { GitService } from './gitService';
-import { FileItem } from './types';
+import { FileItem, FileStatus } from './types';
 import { CommitUI } from './commitUI';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
 
 let treeProvider: NativeTreeProvider;
 let treeView: vscode.TreeView<vscode.TreeItem>;
@@ -134,23 +137,146 @@ export async function activate(context: vscode.ExtensionContext) {
     }),
 
     // Open a diff for a file from the tree
-    vscode.commands.registerCommand('git-manager.openDiff', async (uri: vscode.Uri) => {
+    vscode.commands.registerCommand('git-manager.openDiff', async (uri: vscode.Uri, fileStatus?: FileStatus) => {
+      let tempEmptyFile: string | undefined;
+      let tempHeadFile: string | undefined;
       try {
-        // Build a proper git-scheme URI with JSON query as expected by Git extension
-        const left = vscode.Uri.from({
-          scheme: 'git',
-          path: uri.fsPath,
-          query: JSON.stringify({ path: uri.fsPath, ref: 'HEAD' }),
-        });
-
-        const right = uri; // working tree
         const fileName = uri.fsPath.split('/').pop() || 'file';
-        const title = `${fileName} (HEAD ↔︎ Working Tree)`;
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        const relativePath = workspaceRoot ? vscode.workspace.asRelativePath(uri) : uri.fsPath;
+        
+        let left: vscode.Uri;
+        let right: vscode.Uri;
+        let title: string;
+
+        // Determine file status if not provided
+        let status = fileStatus;
+        if (!status && gitService) {
+          const files = await gitService.getStatus();
+          const file = files.find(f => f.path === relativePath);
+          status = file?.status;
+        }
+
+        // Handle deleted files: show HEAD version vs empty
+        if (status === FileStatus.DELETED) {
+          // For deleted files, we need to get the content from HEAD and create temp files
+          // because the git scheme URI might not work when the file doesn't exist in working tree
+          try {
+            // Get file content from HEAD using git
+            const { execSync } = require('child_process');
+            // Use proper quoting to handle paths with spaces/special characters
+            const headContent = execSync(`git show HEAD:"${relativePath}"`, {
+              cwd: workspaceRoot,
+              encoding: 'utf8',
+              maxBuffer: 10 * 1024 * 1024, // 10MB buffer for large files
+            });
+            
+            // Create temporary file with HEAD content
+            tempHeadFile = path.join(os.tmpdir(), `git-manager-head-${Date.now()}-${fileName}`);
+            fs.writeFileSync(tempHeadFile, headContent);
+            left = vscode.Uri.file(tempHeadFile);
+            
+            // Create temporary empty file for right side
+            tempEmptyFile = path.join(os.tmpdir(), `git-manager-empty-${Date.now()}-${fileName}`);
+            fs.writeFileSync(tempEmptyFile, '');
+            right = vscode.Uri.file(tempEmptyFile);
+            
+            title = `${fileName} (HEAD → Deleted)`;
+          } catch (gitError) {
+            // Fallback: try git scheme URI approach
+            left = vscode.Uri.from({
+              scheme: 'git',
+              path: uri.fsPath,
+              query: JSON.stringify({ path: relativePath, ref: 'HEAD' }),
+            });
+            
+            tempEmptyFile = path.join(os.tmpdir(), `git-manager-empty-${Date.now()}-${fileName}`);
+            fs.writeFileSync(tempEmptyFile, '');
+            right = vscode.Uri.file(tempEmptyFile);
+            
+            title = `${fileName} (HEAD → Deleted)`;
+          }
+        }
+        // Handle new/untracked files: show empty vs working tree version
+        else if (status === FileStatus.ADDED || status === FileStatus.UNTRACKED) {
+          // Left side: create a temporary empty file for comparison
+          tempEmptyFile = path.join(os.tmpdir(), `git-manager-empty-${Date.now()}-${fileName}`);
+          fs.writeFileSync(tempEmptyFile, '');
+          left = vscode.Uri.file(tempEmptyFile);
+          
+          // Right side: working tree version
+          right = uri;
+          
+          title = `${fileName} (New File)`;
+        }
+        // Handle modified files: show HEAD vs working tree (normal case)
+        else {
+          // Build a proper git-scheme URI with JSON query as expected by Git extension
+          left = vscode.Uri.from({
+            scheme: 'git',
+            path: uri.fsPath,
+            query: JSON.stringify({ path: uri.fsPath, ref: 'HEAD' }),
+          });
+
+          right = uri; // working tree
+          title = `${fileName} (HEAD ↔︎ Working Tree)`;
+        }
 
         await vscode.commands.executeCommand('vscode.diff', left, right, title);
+        
+        // Clean up temp files after a delay to ensure VS Code has read them
+        const cleanupTempFiles = () => {
+          if (tempEmptyFile) {
+            try {
+              if (fs.existsSync(tempEmptyFile)) {
+                fs.unlinkSync(tempEmptyFile);
+              }
+            } catch (e) {
+              // Ignore cleanup errors
+            }
+          }
+          if (tempHeadFile) {
+            try {
+              if (fs.existsSync(tempHeadFile)) {
+                fs.unlinkSync(tempHeadFile);
+              }
+            } catch (e) {
+              // Ignore cleanup errors
+            }
+          }
+        };
+        
+        setTimeout(cleanupTempFiles, 1000); // 1 second delay should be enough for VS Code to read the files
       } catch (error) {
+        // Clean up temp files if they exist
+        if (tempEmptyFile && fs.existsSync(tempEmptyFile)) {
+          try {
+            fs.unlinkSync(tempEmptyFile);
+          } catch (e) {
+            // Ignore cleanup errors
+          }
+        }
+        if (tempHeadFile && fs.existsSync(tempHeadFile)) {
+          try {
+            fs.unlinkSync(tempHeadFile);
+          } catch (e) {
+            // Ignore cleanup errors
+          }
+        }
+        
         // Fallback to open if diff fails
-        await vscode.commands.executeCommand('vscode.open', uri);
+        try {
+          // Only try to open if file exists
+          if (fileStatus !== FileStatus.DELETED && fs.existsSync(uri.fsPath)) {
+            await vscode.commands.executeCommand('vscode.open', uri);
+          } else if (fileStatus === FileStatus.DELETED) {
+            vscode.window.showInformationMessage(`File ${uri.fsPath.split('/').pop()} was deleted. Showing diff from HEAD.`);
+          } else {
+            vscode.window.showErrorMessage(`Could not open diff: ${error}`);
+          }
+        } catch (openError) {
+          vscode.window.showErrorMessage(`Could not open diff: ${error}`);
+        }
       }
     }),
 

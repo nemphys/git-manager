@@ -70,7 +70,7 @@ export class FileTreeItem extends vscode.TreeItem {
     this.command = {
       command: 'git-manager.openDiff',
       title: 'Open Diff',
-      arguments: [this.resourceUri],
+      arguments: [this.resourceUri, file.status],
     };
   }
 }
