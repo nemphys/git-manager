@@ -96,7 +96,20 @@ export class FileTreeItem extends vscode.TreeItem {
     } else {
       this.contextValue = 'file';
     }
-    this.iconPath = undefined; // Remove prefix icons
+
+    // Set icon and color based on file status and staged state
+    // For new files (ADDED status): show green "A" marker
+    // For staged files: show green color via icon
+    // Priority: new files get "A" marker, staged files get green circle
+    if (file.status === FileStatus.ADDED) {
+      // New files get a green "A" icon (even if staged)
+      this.iconPath = this.createGreenAIcon();
+    } else if (file.isStaged && changelistId) {
+      // Staged files get a green filled circle icon to indicate they're staged
+      this.iconPath = this.createGreenStagedIcon();
+    } else {
+      this.iconPath = undefined; // Remove prefix icons for other files
+    }
 
     // Resolve the file path relative to workspace root
     const fullPath = path.join(workspaceRoot, file.path);
@@ -108,6 +121,29 @@ export class FileTreeItem extends vscode.TreeItem {
       title: 'Open Diff',
       arguments: [this.resourceUri, file.status, this.changelistId],
     };
+  }
+
+  private createGreenAIcon(): vscode.Uri {
+    // Create a green "A" marker icon for new files
+    const svg = `
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+        <text x="8" y="13" font-family="Arial, sans-serif" font-size="11" font-weight="bold" fill="#4CAF50" text-anchor="middle" dominant-baseline="middle">A</text>
+      </svg>
+    `;
+    const encoded = Buffer.from(svg).toString('base64');
+    return vscode.Uri.parse(`data:image/svg+xml;base64,${encoded}`);
+  }
+
+  private createGreenStagedIcon(): vscode.Uri {
+    // Create a green filled circle icon for staged files to make them visually distinct
+    // This provides a clear green visual indicator that the file is staged
+    const svg = `
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+        <circle cx="8" cy="8" r="6" fill="#4CAF50" opacity="0.8"/>
+      </svg>
+    `;
+    const encoded = Buffer.from(svg).toString('base64');
+    return vscode.Uri.parse(`data:image/svg+xml;base64,${encoded}`);
   }
 }
 
