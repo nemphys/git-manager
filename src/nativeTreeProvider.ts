@@ -276,8 +276,8 @@ export class NativeTreeProvider
         }
       }
       
-      // Note: Files in unversionedFiles are NOT included in fileAssignments,
-      // which means they won't be restored to changelists on next load
+      // Note: Files in changelists are saved in fileAssignments, including untracked files
+      // that have been assigned to changelists. These will be restored on next load.
 
       // Convert changelists to serializable format
       const persistedChangelists = this.changelists.map((c) => ({
@@ -358,6 +358,7 @@ export class NativeTreeProvider
     try {
       const gitFiles = await this.gitService.getStatus();
       const unversionedFiles = await this.gitService.getUnversionedFiles();
+      const gitFilePaths = new Set(gitFiles.map(f => f.path));
 
       // Preserve selection states and changelist assignments for all changelists
       const selectionMap = new Map<string, boolean>();
@@ -401,6 +402,7 @@ export class NativeTreeProvider
 
       // Parse hunks for all files and assign them to changelists
       const fileHunksMap = new Map<string, Hunk[]>(); // filePath -> hunks
+      const currentHunkIds = new Set<string>();
       for (const file of gitFiles) {
         if (file.status !== FileStatus.UNTRACKED && file.status !== FileStatus.DELETED) {
           const unstagedHunks = await this.gitService.getFileHunks(file.path);
@@ -412,6 +414,7 @@ export class NativeTreeProvider
           
           // Assign hunks to changelists
           for (const hunk of allHunks) {
+            currentHunkIds.add(hunk.id);
             const assignedChangelistId = this.hunkAssignments.get(hunk.id);
             if (assignedChangelistId) {
               // Hunk already has an assignment (persisted or previously assigned)
@@ -446,9 +449,27 @@ export class NativeTreeProvider
         }
       }
 
+      // Clean up stale hunk assignments for hunks that no longer exist
+      for (const hunkId of Array.from(this.hunkAssignments.keys())) {
+        if (!currentHunkIds.has(hunkId)) {
+          this.hunkAssignments.delete(hunkId);
+        }
+      }
+
+      // Clean up previous hunks for files that no longer exist in Git status
+      for (const filePath of Array.from(this.previousHunksByFile.keys())) {
+        if (!gitFilePaths.has(filePath)) {
+          this.previousHunksByFile.delete(filePath);
+        }
+      }
+
       // Apply recent moves to assignment map (these take highest priority)
       for (const [filePath, move] of this.recentMoves.entries()) {
-        const file = gitFiles.find((f) => f.path === filePath);
+        // Check both gitFiles and unversionedFiles (file might be in either)
+        let file = gitFiles.find((f) => f.path === filePath);
+        if (!file) {
+          file = unversionedFiles.find((f) => f.path === filePath);
+        }
         if (file) {
           if (move.target === 'changelist' && move.changelistId) {
             // File was recently moved to a changelist - override any other assignment
@@ -560,6 +581,32 @@ export class NativeTreeProvider
         }
       }
 
+      // Process untracked files - assign them to changelists if they have assignments
+      for (const file of unversionedFiles) {
+        // Restore selection state if it was previously selected
+        if (selectionMap.has(file.id)) {
+          file.isSelected = selectionMap.get(file.id)!;
+        }
+
+        // Check if file was explicitly moved to unversioned (should not be in changelist)
+        if (filesToKeepInUnversioned.has(file.path)) {
+          continue;
+        }
+
+        // Check if file has a changelist assignment (from recentMoves or persisted state)
+        const assignedChangelistId = changelistAssignmentMap.get(file.id);
+        
+        if (assignedChangelistId) {
+          // File was assigned to a changelist - add it there
+          const targetChangelist = this.changelists.find((c) => c.id === assignedChangelistId);
+          if (targetChangelist) {
+            file.changelistId = targetChangelist.id;
+            targetChangelist.files.push(file);
+          }
+        }
+        // If no assignment, file will remain in unversionedFilesList (added below)
+      }
+
       // Sort all changelists after loading
       for (const changelist of this.changelists) {
         this.sortChangelistFiles(changelist);
@@ -589,7 +636,7 @@ export class NativeTreeProvider
         }
       });
 
-      // Add untracked files from Git
+      // Add untracked files from Git that are not in any changelist
       unversionedFilesList.push(
         ...unversionedFiles
           .filter((file) => !filesInChangelists.has(file.path) && !filesToKeepInUnversioned.has(file.path))
@@ -915,20 +962,9 @@ export class NativeTreeProvider
     if (file) {
       const targetChangelist = this.changelists.find((c) => c.id === targetChangelistId);
       if (targetChangelist) {
-        // If the file was untracked, add it to Git tracking
-        if (wasUntracked) {
-          try {
-            await this.gitService.addFileToGit(file.path);
-            // Update the file status to ADDED since it's now tracked
-            file.status = FileStatus.ADDED;
-          } catch (error) {
-            console.error('Error adding file to Git:', error);
-            // If adding to Git fails, put the file back in unversioned files
-            this.unversionedFiles.push(file);
-            this._onDidChangeTreeData.fire();
-            return;
-          }
-        }
+        // For untracked files, we don't add them to Git yet - that happens during commit
+        // Just move them to the changelist and they'll be added to Git when committed
+        // This ensures no auto-staging happens
 
         // If file has hunks, move all hunks from source changelist to target changelist
         if (file.hunks && file.hunks.length > 0 && sourceChangelist) {
@@ -1003,22 +1039,10 @@ export class NativeTreeProvider
       this._onDidChangeTreeData.fire(undefined);
     }, 50);
 
-    // Only refresh if we actually changed Git state (added untracked file)
-    // For moves between changelists, we don't need to refresh - just update UI state
-    if (wasUntracked && file) {
-      // Wait a bit for Git operation to complete, then refresh to sync with Git state
-      setTimeout(async () => {
-        try {
-          // Save first to ensure persisted state is current
-          await this.saveChangelists();
-          // Then refresh to sync with Git
-          await this.loadGitStatus();
-          this._onDidChangeTreeData.fire();
-        } catch (error) {
-          console.error('Error refreshing after moving untracked file:', error);
-        }
-      }, 300);
-    } else if (file && file.hunks && file.hunks.length > 0) {
+    // For untracked files, we don't modify Git state, so no need to refresh
+    // The file assignment is already saved and will persist
+    // For files with hunks, refresh to update file assignments based on hunk changes
+    if (file && file.hunks && file.hunks.length > 0 && !wasUntracked) {
       // File has hunks - refresh to update file assignments based on hunk changes
       setTimeout(async () => {
         try {

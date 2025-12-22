@@ -1402,62 +1402,12 @@ export async function activate(context: vscode.ExtensionContext) {
   const fileSystemWatcher = vscode.workspace.createFileSystemWatcher('**/*');
   fileSystemWatcher.onDidChange(async (uri) => {
     if (treeProvider) {
-      // Auto-stage the changed file if the feature is enabled
-      const config = vscode.workspace.getConfiguration('git-manager');
-      const autoStageEnabled = config.get<boolean>('autoStageFiles', true);
-
-      if (autoStageEnabled && gitService) {
-        const relativePath = vscode.workspace.asRelativePath(uri);
-
-        // Skip auto-staging for certain file types
-        if (shouldSkipAutoStage(relativePath)) {
-          return;
-        }
-
-        // Only auto-stage files that are already tracked by Git
-        const isTracked = await gitService.isFileTracked(relativePath);
-        if (!isTracked) {
-          return;
-        }
-
-        try {
-          await gitService.stageFile(relativePath);
-        } catch (error) {
-          console.error(`Failed to auto-stage file ${relativePath}:`, error);
-        }
-      }
-
       treeProvider.refresh();
       updateAllCommitUI();
     }
   });
   fileSystemWatcher.onDidCreate(async (uri) => {
     if (treeProvider) {
-      // Auto-stage the new file if the feature is enabled
-      const config = vscode.workspace.getConfiguration('git-manager');
-      const autoStageEnabled = config.get<boolean>('autoStageFiles', true);
-
-      if (autoStageEnabled && gitService) {
-        const relativePath = vscode.workspace.asRelativePath(uri);
-
-        // Skip auto-staging for certain file types
-        if (shouldSkipAutoStage(relativePath)) {
-          return;
-        }
-
-        // Only auto-stage files that are already tracked by Git
-        const isTracked = await gitService.isFileTracked(relativePath);
-        if (!isTracked) {
-          return;
-        }
-
-        try {
-          await gitService.stageFile(relativePath);
-        } catch (error) {
-          console.error(`Failed to auto-stage file ${relativePath}:`, error);
-        }
-      }
-
       treeProvider.refresh();
       updateAllCommitUI();
       // Decorations will be updated via onDidChangeTreeData listener
@@ -1472,6 +1422,14 @@ export async function activate(context: vscode.ExtensionContext) {
   });
 
   context.subscriptions.push(fileSystemWatcher);
+  
+  // Refresh changelists when the window regains focus to catch external Git changes
+  vscode.window.onDidChangeWindowState((state) => {
+    if (state.focused && treeProvider) {
+      treeProvider.refresh();
+      updateAllCommitUI();
+    }
+  });
   
   // Dispose decoration provider on deactivate
   context.subscriptions.push({
