@@ -518,7 +518,6 @@ export class CommitDialog {
           }
           
           .file-name {
-            flex: 1;
             font-weight: 500;
             overflow: hidden;
             text-overflow: ellipsis;
@@ -526,24 +525,12 @@ export class CommitDialog {
             min-width: 0;
           }
           
-          .file-path {
-            color: var(--vscode-descriptionForeground);
-            font-size: 11px;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-            max-width: 100px;
-            flex-shrink: 1;
-          }
-          
           .hunk-count {
-            font-size: 11px;
+            font-size: 10px;
             color: var(--vscode-descriptionForeground);
+            opacity: 0.6;
             white-space: nowrap;
-            margin-left: auto;
-            padding-left: 8px;
-            min-width: 100px;
-            text-align: right;
+            margin-left: 8px;
             flex-shrink: 0;
           }
           
@@ -1051,20 +1038,15 @@ export class CommitDialog {
               nameSpan.setAttribute('data-file-id', file.id);
               nameSpan.textContent = file.displayName || file.name;
 
-              const pathSpan = document.createElement('span');
-              pathSpan.className = 'file-path';
-              pathSpan.textContent = file.relativePath;
-
               fileItem.appendChild(checkbox);
               fileItem.appendChild(statusSpan);
               fileItem.appendChild(nameSpan);
-              fileItem.appendChild(pathSpan);
 
               if (fileHunksForFile.length > 0) {
                 const hunkSummary = document.createElement('span');
                 hunkSummary.className = 'hunk-count';
-                hunkSummary.textContent = selectedHunksForFile.length + ' selected hunk' + (selectedHunksForFile.length === 1 ? '' : 's');
-                fileItem.appendChild(hunkSummary);
+                hunkSummary.textContent = selectedHunksForFile.length + '/' + fileHunksForFile.length + ' hunk' + (fileHunksForFile.length === 1 ? '' : 's');
+                nameSpan.parentNode.insertBefore(hunkSummary, nameSpan.nextSibling);
               }
 
               container.appendChild(fileItem);
@@ -1212,13 +1194,18 @@ export class CommitDialog {
                     const selectedHunksForFile = selectedHunks[fileId] || [];
                     const fileHunksForFile = fileHunks[fileId] || [];
                     let hunkCountElement = item.querySelector('.hunk-count');
+                    const nameSpan = item.querySelector('.file-name');
                     if (fileHunksForFile.length > 0) {
                       if (!hunkCountElement) {
                         hunkCountElement = document.createElement('span');
                         hunkCountElement.className = 'hunk-count';
-                        item.appendChild(hunkCountElement);
+                        if (nameSpan && nameSpan.nextSibling) {
+                          nameSpan.parentNode.insertBefore(hunkCountElement, nameSpan.nextSibling);
+                        } else {
+                          item.appendChild(hunkCountElement);
+                        }
                       }
-                      hunkCountElement.textContent = selectedHunksForFile.length + ' selected hunk' + (selectedHunksForFile.length === 1 ? '' : 's');
+                      hunkCountElement.textContent = selectedHunksForFile.length + '/' + fileHunksForFile.length + ' hunk' + (fileHunksForFile.length === 1 ? '' : 's');
                       hunkCountElement.style.display = '';
                     } else if (hunkCountElement) {
                       hunkCountElement.style.display = 'none';
@@ -1274,13 +1261,18 @@ export class CommitDialog {
                     const selectedHunksForFile = selectedHunks[message.fileId] || [];
                     const fileHunksForFile = fileHunks[message.fileId] || [];
                     let hunkCountElement = fileItemElement.querySelector('.hunk-count');
+                    const nameSpan = fileItemElement.querySelector('.file-name');
                     if (fileHunksForFile.length > 0) {
                       if (!hunkCountElement) {
                         hunkCountElement = document.createElement('span');
                         hunkCountElement.className = 'hunk-count';
-                        fileItemElement.appendChild(hunkCountElement);
+                        if (nameSpan && nameSpan.nextSibling) {
+                          nameSpan.parentNode.insertBefore(hunkCountElement, nameSpan.nextSibling);
+                        } else {
+                          fileItemElement.appendChild(hunkCountElement);
+                        }
                       }
-                        hunkCountElement.textContent = selectedHunksForFile.length + ' selected hunk' + (selectedHunksForFile.length === 1 ? '' : 's');
+                        hunkCountElement.textContent = selectedHunksForFile.length + '/' + fileHunksForFile.length + ' hunk' + (fileHunksForFile.length === 1 ? '' : 's');
                       hunkCountElement.style.display = '';
                     }
                   }
