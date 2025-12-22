@@ -330,30 +330,12 @@ export class CommitDialog {
   }
 
   private getWebviewContent(): string {
-    const filesHtml = this.allFiles
-      .map((file) => {
-        const isSelected = this.selectedFileIds.has(file.id);
-        const hunks = this.fileHunks.get(file.id) || [];
-        const selectedHunks = this.selectedHunksByFile.get(file.id) || new Set();
-        const allHunksSelected = hunks.length > 0 && hunks.every(h => selectedHunks.has(h.id));
-        const someHunksSelected = hunks.some(h => selectedHunks.has(h.id));
-        
-        return `
-          <div class="file-item ${isSelected ? 'selected' : ''}" data-file-id="${file.id}">
-            <input 
-              type="checkbox" 
-              class="file-checkbox" 
-              ${isSelected ? 'checked' : ''}
-              data-file-id="${file.id}"
-            />
-            <span class="file-status ${file.status}">${this.getStatusLabel(file.status)}</span>
-            <span class="file-name" data-file-id="${file.id}">${this.escapeHtml(file.name)}</span>
-            <span class="file-path">${this.escapeHtml(file.relativePath)}</span>
-            ${hunks.length > 0 ? `<span class="hunk-count">${selectedHunks.size}/${hunks.length} hunks</span>` : ''}
-          </div>
-        `;
-      })
-      .join('');
+    // Prepare a serializable representation of files for the webview,
+    // including a pre-computed status label for each file.
+    const webviewFiles = this.allFiles.map((file) => ({
+      ...file,
+      statusLabel: this.getStatusLabel(file.status),
+    }));
 
     const selectedCount = this.selectedFileIds.size;
     const totalCount = this.allFiles.length;
@@ -423,6 +405,45 @@ export class CommitDialog {
           .file-list {
             flex: 1;
             overflow-y: auto;
+          }
+          
+          .tree-folder {
+            border-bottom: 1px solid var(--vscode-panel-border);
+          }
+          
+          .folder-row {
+            display: flex;
+            align-items: center;
+            padding: 6px 12px;
+            gap: 6px;
+            cursor: default;
+            user-select: none;
+            font-size: 12px;
+            color: var(--vscode-descriptionForeground);
+          }
+          
+          .folder-row:hover {
+            background-color: var(--vscode-list-hoverBackground);
+          }
+          
+          .folder-toggle {
+            width: 22px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            opacity: 0.9;
+            font-size: 13px;
+            line-height: 1;
+            transform-origin: center;
+          }
+          
+          .folder-name {
+            font-weight: 500;
+          }
+          
+          .tree-children {
+            /* Container for nested folders/files */
           }
           
           .file-item {
@@ -837,9 +858,7 @@ export class CommitDialog {
             <div class="file-list-header">
               Files (${selectedCount}/${totalCount} selected)
             </div>
-            <div class="file-list">
-              ${filesHtml || '<div style="padding: 12px; color: var(--vscode-descriptionForeground);">No files</div>'}
-            </div>
+            <div class="file-list" id="file-list"></div>
           </div>
         </div>
         
@@ -880,43 +899,184 @@ export class CommitDialog {
         
         <script>
           const vscode = acquireVsCodeApi();
+          const allFiles = ${JSON.stringify(webviewFiles)};
           let selectedFiles = ${JSON.stringify(Array.from(this.selectedFileIds))};
           let selectedHunks = ${JSON.stringify(Object.fromEntries(Array.from(this.selectedHunksByFile.entries()).map(([f, h]) => [f, Array.from(h)])))};
           let currentFileId = null;
           // Initialize fileHunks with data from all files so hunk counts are always available
           let fileHunks = ${JSON.stringify(Object.fromEntries(Array.from(this.fileHunks.entries()).map(([fileId, hunks]) => [fileId, hunks.map(h => ({ id: h.id, oldStart: h.oldStart, oldLines: h.oldLines, newStart: h.newStart, newLines: h.newLines, isSelected: false, belongsToChangelist: false, changelistId: h.changelistId }))])))};
           
+          // Simple flag to prevent recursive updates
+          let updatingUI = false;
+          const INDENT_PER_LEVEL = 14;
+
+          function buildFolderTree(files) {
+            const root = { children: {}, files: [] };
+            for (const file of files) {
+              const parts = (file.relativePath || file.path || '').split(/[\\/]/);
+              const fileName = parts.pop() || file.name;
+              const dirParts = parts;
+              let node = root;
+              for (const part of dirParts) {
+                if (!part) continue;
+                if (!node.children[part]) {
+                  node.children[part] = { children: {}, files: [] };
+                }
+                node = node.children[part];
+              }
+              node.files.push({ ...file, displayName: fileName });
+            }
+            return root;
+          }
+
+          function renderFiles(files, container, depth) {
+            const sorted = [...files].sort((a, b) => a.displayName.localeCompare(b.displayName));
+            for (const file of sorted) {
+              const isSelected = selectedFiles.includes(file.id);
+              const fileHunksForFile = fileHunks[file.id] || [];
+              const selectedHunksForFile = selectedHunks[file.id] || [];
+
+              const fileItem = document.createElement('div');
+              fileItem.className = 'file-item' + (isSelected ? ' selected' : '');
+              fileItem.setAttribute('data-file-id', file.id);
+              fileItem.style.paddingLeft = (depth * INDENT_PER_LEVEL) + 'px';
+
+              const checkbox = document.createElement('input');
+              checkbox.type = 'checkbox';
+              checkbox.className = 'file-checkbox';
+              checkbox.setAttribute('data-file-id', file.id);
+              checkbox.checked = isSelected;
+
+              const statusSpan = document.createElement('span');
+              statusSpan.className = 'file-status ' + file.status;
+              statusSpan.textContent = file.statusLabel;
+
+              const nameSpan = document.createElement('span');
+              nameSpan.className = 'file-name';
+              nameSpan.setAttribute('data-file-id', file.id);
+              nameSpan.textContent = file.displayName || file.name;
+
+              const pathSpan = document.createElement('span');
+              pathSpan.className = 'file-path';
+              pathSpan.textContent = file.relativePath;
+
+              fileItem.appendChild(checkbox);
+              fileItem.appendChild(statusSpan);
+              fileItem.appendChild(nameSpan);
+              fileItem.appendChild(pathSpan);
+
+              if (fileHunksForFile.length > 0) {
+                const hunkSummary = document.createElement('span');
+                hunkSummary.className = 'hunk-count';
+                hunkSummary.textContent = selectedHunksForFile.length + ' selected hunk' + (selectedHunksForFile.length === 1 ? '' : 's');
+                fileItem.appendChild(hunkSummary);
+              }
+
+              container.appendChild(fileItem);
+            }
+          }
+
+          function renderFolder(node, container, depth, parentPath) {
+            const folderNames = Object.keys(node.children).sort();
+            for (const folderName of folderNames) {
+              const folderNode = node.children[folderName];
+              const folderPath = parentPath ? parentPath + '/' + folderName : folderName;
+
+              const folderElement = document.createElement('div');
+              folderElement.className = 'tree-folder';
+              folderElement.setAttribute('data-folder-path', folderPath);
+
+              const folderRow = document.createElement('div');
+              folderRow.className = 'folder-row';
+              folderRow.style.paddingLeft = (depth * INDENT_PER_LEVEL) + 'px';
+
+              const toggle = document.createElement('span');
+              toggle.className = 'folder-toggle';
+              // Use a larger filled triangle so the caret is visually prominent
+              toggle.textContent = '▼';
+
+              const nameSpan = document.createElement('span');
+              nameSpan.className = 'folder-name';
+              nameSpan.textContent = folderName;
+
+              folderRow.appendChild(toggle);
+              folderRow.appendChild(nameSpan);
+              folderElement.appendChild(folderRow);
+
+              const childrenContainer = document.createElement('div');
+              childrenContainer.className = 'tree-children';
+              folderElement.appendChild(childrenContainer);
+
+              toggle.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const isCollapsed = childrenContainer.style.display === 'none';
+                childrenContainer.style.display = isCollapsed ? '' : 'none';
+                toggle.textContent = isCollapsed ? '▼' : '▶';
+              });
+
+              container.appendChild(folderElement);
+
+              // Render files that live directly in this folder
+              renderFiles(folderNode.files, childrenContainer, depth + 1);
+              // Render sub-folders
+              renderFolder(folderNode, childrenContainer, depth + 1, folderPath);
+            }
+
+            // Render files that are directly under the current node (for root)
+            if (parentPath === '') {
+              renderFiles(node.files, container, depth);
+            }
+          }
+
+          function renderTree() {
+            const list = document.getElementById('file-list');
+            if (!list) return;
+            list.innerHTML = '';
+            if (!allFiles || allFiles.length === 0) {
+              list.innerHTML = '<div style="padding: 12px; color: var(--vscode-descriptionForeground);">No files</div>';
+              return;
+            }
+
+            const tree = buildFolderTree(allFiles);
+            renderFolder(tree, list, 0, '');
+          }
+
+          renderTree();
+
           // File checkbox handler - check flag first
           document.addEventListener('change', function(e) {
             if (updatingUI) return;
-            if (e.target.classList.contains('file-checkbox')) {
+            const target = e.target;
+            if (target && target.classList && target.classList.contains('file-checkbox')) {
               e.stopPropagation();
-              const fileId = e.target.getAttribute('data-file-id');
+              const fileId = target.getAttribute('data-file-id');
               if (fileId) {
                 vscode.postMessage({ command: 'selectFile', fileId: fileId });
               }
             }
           });
           
-          // Simple flag to prevent recursive updates
-          let updatingUI = false;
-          
           // File click to view diff (controls the active/highlighted file)
-          document.querySelectorAll('.file-name, .file-item').forEach(element => {
-            element.addEventListener('click', function(e) {
-              if (e.target.type === 'checkbox') return;
-              const fileId = this.getAttribute('data-file-id') || this.closest('.file-item').getAttribute('data-file-id');
+          document.addEventListener('click', function(e) {
+            const target = e.target;
+            if (!target || !(target instanceof HTMLElement)) return;
+            if (target.classList.contains('file-checkbox')) {
+              return;
+            }
+            const fileItem = target.closest('.file-item');
+            if (fileItem) {
+              const fileId = fileItem.getAttribute('data-file-id');
               if (fileId) {
                 currentFileId = fileId;
                 // Update only the active (highlighted) file; selection is driven by checkboxes
                 document.querySelectorAll('.file-item').forEach(item => {
                   item.classList.remove('active');
                 });
-                this.closest('.file-item').classList.add('active');
+                fileItem.classList.add('active');
                 vscode.postMessage({ command: 'viewFile', fileId: fileId });
                 vscode.postMessage({ command: 'getDiff', fileId: fileId });
               }
-            });
+            }
           });
           
           // Listen for messages from extension
@@ -963,7 +1123,7 @@ export class CommitDialog {
                         hunkCountElement.className = 'hunk-count';
                         item.appendChild(hunkCountElement);
                       }
-                      hunkCountElement.textContent = selectedHunksForFile.length + '/' + fileHunksForFile.length + ' hunks';
+                      hunkCountElement.textContent = selectedHunksForFile.length + ' selected hunk' + (selectedHunksForFile.length === 1 ? '' : 's');
                       hunkCountElement.style.display = '';
                     } else if (hunkCountElement) {
                       hunkCountElement.style.display = 'none';
@@ -1025,7 +1185,7 @@ export class CommitDialog {
                         hunkCountElement.className = 'hunk-count';
                         fileItemElement.appendChild(hunkCountElement);
                       }
-                      hunkCountElement.textContent = selectedHunksForFile.length + '/' + fileHunksForFile.length + ' hunks';
+                        hunkCountElement.textContent = selectedHunksForFile.length + ' selected hunk' + (selectedHunksForFile.length === 1 ? '' : 's');
                       hunkCountElement.style.display = '';
                     }
                   }
