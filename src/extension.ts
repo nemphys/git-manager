@@ -6,6 +6,7 @@ import { GitService } from './gitService';
 import { FileItem, FileStatus, Hunk } from './types';
 import { CommitUI } from './commitUI';
 import { HunkDecorationProvider } from './hunkDecorations';
+import { CommitDialog } from './commitDialog';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -614,40 +615,59 @@ export async function activate(context: vscode.ExtensionContext) {
         return;
       }
 
-      const message = await vscode.window.showInputBox({
-        prompt: 'Enter commit message',
-        placeHolder: 'Describe your changes...',
-        validateInput: (value) => {
-          if (!value || value.trim().length === 0) {
-            return 'Commit message cannot be empty';
-          }
-          return null;
-        },
-      });
+      // Pre-select all files
+      const preSelectedFileIds = files.map(f => f.id);
 
-      if (message) {
-        const choice = await vscode.window.showQuickPick(
-          [
-            { label: 'Commit', amend: false, push: false },
-            { label: 'Amend Commit', amend: true, push: false },
-            { label: 'Commit and Push', amend: false, push: true },
-            { label: 'Amend Commit and Push', amend: true, push: true },
-          ],
-          { placeHolder: 'Choose commit action' }
-        );
-        if (!choice) {
+      // Open commit dialog
+      if (!workspaceRoot) {
+        vscode.window.showErrorMessage('No workspace root found.');
+        return;
+      }
+      const hunkAssignments = treeProvider.getHunkAssignments();
+      const dialog = new CommitDialog(files, preSelectedFileIds, workspaceRoot, gitService, activeChangelistId, hunkAssignments);
+      const result = await dialog.show();
+
+      if (result) {
+        // Filter files to only selected ones
+        let selectedFiles = files.filter(f => result.selectedFiles.includes(f.id));
+        
+        // Load hunks for files that don't have them
+        for (const file of selectedFiles) {
+          if (!file.hunks || file.hunks.length === 0) {
+            const unstagedHunks = await gitService.getFileHunks(file.path);
+            const stagedHunks = await gitService.getStagedHunks(file.path);
+            file.hunks = [...unstagedHunks, ...stagedHunks];
+          }
+        }
+        
+        // For files with selected hunks, update the file's hunks to only include selected ones
+        // Also filter out files that have hunks but no selected hunks
+        selectedFiles = selectedFiles.filter(file => {
+          const selectedHunkIds = result.selectedHunks[file.id] || [];
+          if (file.hunks && file.hunks.length > 0) {
+            // File has hunks - only include if some hunks are selected
+            if (selectedHunkIds.length > 0) {
+              file.hunks = file.hunks.filter(h => selectedHunkIds.includes(h.id));
+              return true;
+            }
+            return false; // File has hunks but none selected - skip it
+          }
+          // File has no hunks - include it (will commit whole file)
+          return true;
+        });
+
+        if (selectedFiles.length === 0) {
+          vscode.window.showWarningMessage('No files or hunks selected for commit.');
           return;
         }
-        const success = await gitService.commitFiles(files, message.trim(), { amend: choice.amend, changelistId: activeChangelistId });
+
+        const success = await gitService.commitFiles(selectedFiles, result.message, { 
+          amend: result.amend, 
+          changelistId: activeChangelistId 
+        });
 
         if (success) {
-          vscode.window.showInformationMessage(`Successfully committed ${files.length} file(s)`);
-          if (choice.push) {
-            const pushed = await gitService.pushCurrentBranch();
-            if (pushed) {
-              vscode.window.showInformationMessage('Pushed to remote successfully');
-            }
-          }
+          vscode.window.showInformationMessage(`Successfully committed ${selectedFiles.length} file(s)`);
           treeProvider.refresh();
           updateAllCommitUI();
         } else {
@@ -666,59 +686,86 @@ export async function activate(context: vscode.ExtensionContext) {
       }
 
       // Extract FileItem objects from selected tree items
-      const allFiles = treeProvider.getFilesFromTreeItems(selectedItems);
-      if (allFiles.length === 0) {
+      const selectedFiles = treeProvider.getFilesFromTreeItems(selectedItems);
+      if (selectedFiles.length === 0) {
         vscode.window.showWarningMessage('No files selected for commit. Please select file items from the tree view.');
         return;
       }
 
       // Filter to only files in the active changelist
       const activeChangelistId = treeProvider.getActiveChangelistId();
-      const files = allFiles.filter((file) => file.changelistId === activeChangelistId);
+      if (!activeChangelistId) {
+        vscode.window.showWarningMessage('No active changelist. Please set a changelist as active first.');
+        return;
+      }
+      const selectedFilesInChangelist = selectedFiles.filter((file) => file.changelistId === activeChangelistId);
       
-      if (files.length === 0) {
+      if (selectedFilesInChangelist.length === 0) {
         vscode.window.showWarningMessage('No files from the active changelist selected. Please select files from the active changelist.');
         return;
       }
 
-      if (files.length < allFiles.length) {
-        vscode.window.showInformationMessage(`Only committing ${files.length} file(s) from the active changelist. ${allFiles.length - files.length} file(s) were ignored.`);
+      // Get all files from the active changelist (to show in dialog)
+      const allChangelistFiles = treeProvider.getFilesFromChangelist(activeChangelistId);
+      
+      if (allChangelistFiles.length === 0) {
+        vscode.window.showWarningMessage('No files in the active changelist to commit.');
+        return;
       }
 
-      const message = await vscode.window.showInputBox({
-        prompt: 'Enter commit message',
-        placeHolder: 'Describe your changes...',
-        validateInput: (value) => {
-          if (!value || value.trim().length === 0) {
-            return 'Commit message cannot be empty';
-          }
-          return null;
-        },
-      });
+      // Pre-select only the selected files (not all files)
+      const preSelectedFileIds = selectedFilesInChangelist.map(f => f.id);
 
-      if (message) {
-        const choice = await vscode.window.showQuickPick(
-          [
-            { label: 'Commit', amend: false, push: false },
-            { label: 'Amend Commit', amend: true, push: false },
-            { label: 'Commit and Push', amend: false, push: true },
-            { label: 'Amend Commit and Push', amend: true, push: true },
-          ],
-          { placeHolder: 'Choose commit action' }
-        );
-        if (!choice) {
+      // Open commit dialog with all changelist files, but only selected ones pre-checked
+      if (!workspaceRoot) {
+        vscode.window.showErrorMessage('No workspace root found.');
+        return;
+      }
+      const hunkAssignments = treeProvider.getHunkAssignments();
+      const dialog = new CommitDialog(allChangelistFiles, preSelectedFileIds, workspaceRoot, gitService, activeChangelistId, hunkAssignments);
+      const result = await dialog.show();
+
+      if (result) {
+        // Filter files to only selected ones
+        let filesToCommit = allChangelistFiles.filter(f => result.selectedFiles.includes(f.id));
+        
+        // Load hunks for files that don't have them
+        for (const file of filesToCommit) {
+          if (!file.hunks || file.hunks.length === 0) {
+            const unstagedHunks = await gitService.getFileHunks(file.path);
+            const stagedHunks = await gitService.getStagedHunks(file.path);
+            file.hunks = [...unstagedHunks, ...stagedHunks];
+          }
+        }
+        
+        // For files with selected hunks, update the file's hunks to only include selected ones
+        // Also filter out files that have hunks but no selected hunks
+        filesToCommit = filesToCommit.filter(file => {
+          const selectedHunkIds = result.selectedHunks[file.id] || [];
+          if (file.hunks && file.hunks.length > 0) {
+            // File has hunks - only include if some hunks are selected
+            if (selectedHunkIds.length > 0) {
+              file.hunks = file.hunks.filter(h => selectedHunkIds.includes(h.id));
+              return true;
+            }
+            return false; // File has hunks but none selected - skip it
+          }
+          // File has no hunks - include it (will commit whole file)
+          return true;
+        });
+
+        if (filesToCommit.length === 0) {
+          vscode.window.showWarningMessage('No files or hunks selected for commit.');
           return;
         }
-        const success = await gitService.commitFiles(files, message.trim(), { amend: choice.amend, changelistId: activeChangelistId });
+
+        const success = await gitService.commitFiles(filesToCommit, result.message, { 
+          amend: result.amend, 
+          changelistId: activeChangelistId 
+        });
 
         if (success) {
-          vscode.window.showInformationMessage(`Successfully committed ${files.length} file(s)`);
-          if (choice.push) {
-            const pushed = await gitService.pushCurrentBranch();
-            if (pushed) {
-              vscode.window.showInformationMessage('Pushed to remote successfully');
-            }
-          }
+          vscode.window.showInformationMessage(`Successfully committed ${filesToCommit.length} file(s)`);
           treeProvider.refresh();
           updateAllCommitUI();
         } else {

@@ -535,8 +535,8 @@ export class GitService {
 
   async getFileHunks(filePath: string): Promise<Hunk[]> {
     try {
-      // Get diff for the file
-      const { stdout } = await this.executeGitCommand(['diff', '--unified=0', '--', filePath]);
+      // Get diff for the file.
+      const { stdout } = await this.executeGitCommand(['diff', '--', filePath]);
       
       if (!stdout.trim()) {
         return [];
@@ -607,8 +607,8 @@ export class GitService {
 
   async getStagedHunks(filePath: string): Promise<Hunk[]> {
     try {
-      // Get staged diff for the file
-      const { stdout } = await this.executeGitCommand(['diff', '--cached', '--unified=0', '--', filePath]);
+      // Get staged diff for the file.
+      const { stdout } = await this.executeGitCommand(['diff', '--cached', '--', filePath]);
       
       if (!stdout.trim()) {
         return [];
@@ -746,6 +746,59 @@ export class GitService {
     } catch (error) {
       console.error('Error unstaging hunk:', error);
       return false;
+    }
+  }
+
+  async getFileDiff(filePath: string, fileStatus: FileStatus): Promise<string> {
+    try {
+      // For new/untracked files, show the full file content as additions
+      if (fileStatus === FileStatus.ADDED || fileStatus === FileStatus.UNTRACKED) {
+        try {
+          const fileContent = fs.readFileSync(path.join(this.workspaceRoot, filePath), 'utf8');
+          const lines = fileContent.split('\n');
+          let diff = `--- /dev/null\n+++ b/${filePath}\n`;
+          diff += `@@ -0,0 +1,${lines.length} @@\n`;
+          for (const line of lines) {
+            diff += `+${line}\n`;
+          }
+          return diff;
+        } catch (error) {
+          return `--- /dev/null\n+++ b/${filePath}\n@@ -0,0 +1,0 @@\n`;
+        }
+      }
+      
+      // For deleted files, show the file content as deletions
+      if (fileStatus === FileStatus.DELETED) {
+        try {
+          const { stdout } = await this.executeGitCommand(['show', `HEAD:${filePath}`]);
+          const lines = stdout.split('\n');
+          let diff = `--- a/${filePath}\n+++ /dev/null\n`;
+          diff += `@@ -1,${lines.length} +0,0 @@\n`;
+          for (const line of lines) {
+            diff += `-${line}\n`;
+          }
+          return diff;
+        } catch (error) {
+          return `--- a/${filePath}\n+++ /dev/null\n@@ -1,0 +0,0 @@\n`;
+        }
+      }
+      
+      // For modified files, get the unified diff
+      const { stdout: unstagedDiff } = await this.executeGitCommand(['diff', '--', filePath]);
+      const { stdout: stagedDiff } = await this.executeGitCommand(['diff', '--cached', '--', filePath]);
+      
+      // Combine staged and unstaged diffs
+      if (stagedDiff.trim() && unstagedDiff.trim()) {
+        // Both staged and unstaged changes - combine them
+        return stagedDiff + '\n' + unstagedDiff;
+      } else if (stagedDiff.trim()) {
+        return stagedDiff;
+      } else {
+        return unstagedDiff;
+      }
+    } catch (error) {
+      console.error('Error getting file diff:', error);
+      return '';
     }
   }
 }
