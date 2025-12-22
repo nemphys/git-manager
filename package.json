@@ -211,17 +211,8 @@
         "icon": "$(list-tree)"
       }
     ],
-    "viewsContainers": {
-      "activitybar": [
-        {
-          "id": "git-manager",
-          "title": "Commit Manager",
-          "icon": "resources/commit-manager-icon.svg"
-        }
-      ]
-    },
     "views": {
-      "git-manager": [
+      "explorer": [
         {
           "id": "git-manager.changelists",
           "name": "Changelists",
