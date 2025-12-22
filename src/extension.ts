@@ -307,12 +307,29 @@ export async function activate(context: vscode.ExtensionContext) {
         }
         // Handle modified files: show HEAD vs working tree (normal case)
         else {
-          // Build a proper git-scheme URI with JSON query as expected by Git extension
-          left = vscode.Uri.from({
-            scheme: 'git',
-            path: uri.fsPath,
-            query: JSON.stringify({ path: uri.fsPath, ref: 'HEAD' }),
-          });
+          // Create a temporary file with HEAD content to avoid git URI resolution issues
+          // This ensures VS Code properly displays the file as modified, not deleted
+          try {
+            const { execSync } = require('child_process');
+            // Use proper quoting to handle paths with spaces/special characters
+            const headContent = execSync(`git show HEAD:"${relativePath}"`, {
+              cwd: workspaceRoot,
+              encoding: 'utf8',
+              maxBuffer: 10 * 1024 * 1024, // 10MB buffer for large files
+            });
+            
+            // Create temporary file with HEAD content
+            tempHeadFile = path.join(os.tmpdir(), `git-manager-head-${Date.now()}-${fileName}`);
+            fs.writeFileSync(tempHeadFile, headContent);
+            left = vscode.Uri.file(tempHeadFile);
+          } catch (gitError) {
+            // Fallback: try git scheme URI approach if HEAD content can't be retrieved
+            left = vscode.Uri.from({
+              scheme: 'git',
+              path: uri.fsPath,
+              query: JSON.stringify({ path: relativePath, ref: 'HEAD' }),
+            });
+          }
 
           // If changelistId is provided, create a filtered version with only hunks from that changelist
           if (changelistId && treeProvider && workspaceRoot) {
@@ -342,7 +359,10 @@ export async function activate(context: vscode.ExtensionContext) {
 
         await vscode.commands.executeCommand('vscode.diff', left, right, title);
         
-        // Clean up temp files after a delay to ensure VS Code has read them
+        // Clean up temp files after a delay to ensure VS Code has read them.
+        // IMPORTANT: If we clean them up too quickly, VS Code may re-check the
+        // resources and mark them as deleted, causing the tab title to show the
+        // filename as struck-through. Use a generous timeout to avoid that.
         const cleanupTempFiles = () => {
           if (tempEmptyFile) {
             try {
@@ -363,8 +383,11 @@ export async function activate(context: vscode.ExtensionContext) {
             }
           }
         };
-        
-        setTimeout(cleanupTempFiles, 1000); // 1 second delay should be enough for VS Code to read the files
+
+        // Keep temp files around for several minutes so that VS Code can safely
+        // reuse the diff without the left/right resources disappearing.
+        // 5 minutes is a good compromise between correctness and disk usage.
+        setTimeout(cleanupTempFiles, 5 * 60 * 1000);
       } catch (error) {
         // Clean up temp files if they exist
         if (tempEmptyFile && fs.existsSync(tempEmptyFile)) {
