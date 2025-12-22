@@ -894,9 +894,11 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     }),
 
-    vscode.commands.registerCommand('git-manager.refresh', () => {
-      treeProvider.refresh();
-      updateAllCommitUI();
+    vscode.commands.registerCommand('git-manager.refresh', async () => {
+      if (treeProvider) {
+        await treeProvider.refresh();
+        updateAllCommitUI();
+      }
     }),
 
     // Removed expandAll command

@@ -395,8 +395,12 @@ export class NativeTreeProvider
       const gitFiles = await this.gitService.getStatus();
       const unversionedFiles = await this.gitService.getUnversionedFiles();
       const gitFilePaths = new Set(gitFiles.map(f => f.path));
+      const unversionedFilePaths = new Set(unversionedFiles.map(f => f.path));
+      // Create a combined set of all files that exist in git status (tracked or untracked)
+      const allValidFilePaths = new Set([...gitFilePaths, ...unversionedFilePaths]);
 
       // Preserve selection states and changelist assignments for all changelists
+      // BUT: Only preserve for files that still exist in git status
       const selectionMap = new Map<string, boolean>();
       const changelistAssignmentMap = new Map<string, string>();
       const filesToKeepInUnversioned = new Set<string>(); // Track files explicitly moved to unversioned
@@ -410,20 +414,27 @@ export class NativeTreeProvider
       }
 
       // Collect all current selection states and changelist assignments
+      // Only preserve for files that still exist in git status (not reverted)
       for (const changelist of this.changelists) {
         for (const file of changelist.files) {
-          selectionMap.set(file.id, file.isSelected);
-          changelistAssignmentMap.set(file.id, changelist.id);
+          // Only preserve state if file still exists in git status
+          if (allValidFilePaths.has(file.path)) {
+            selectionMap.set(file.id, file.isSelected);
+            changelistAssignmentMap.set(file.id, changelist.id);
+          }
         }
       }
 
       // Also collect selection states from unversioned files
-      // Track files that are explicitly in unversioned (changelistId is undefined)
+      // Only preserve for files that still exist
       for (const file of this.unversionedFiles) {
-        selectionMap.set(file.id, file.isSelected);
-        // If file has no changelistId, it was explicitly moved to unversioned
-        if (!file.changelistId) {
-          filesToKeepInUnversioned.add(file.path);
+        // Only preserve state if file still exists in git status
+        if (allValidFilePaths.has(file.path)) {
+          selectionMap.set(file.id, file.isSelected);
+          // If file has no changelistId, it was explicitly moved to unversioned
+          if (!file.changelistId) {
+            filesToKeepInUnversioned.add(file.path);
+          }
         }
       }
 
@@ -522,14 +533,20 @@ export class NativeTreeProvider
       // Load persisted file assignments if available (only as fallback for files not in current state)
       // BUT: Don't use persisted assignments for files that are currently in unversioned
       if (persistedState && persistedState.fileAssignments) {
-        // Get set of files currently in unversioned (by path)
-        const unversionedFilePaths = new Set(this.unversionedFiles.map(f => f.path));
+        // Get set of files currently in unversioned (by path) - use the one from current unversionedFiles
+        const currentUnversionedFilePaths = new Set(this.unversionedFiles.map(f => f.path));
         
         // Merge persisted assignments only for files that don't have a current assignment
         // AND are not currently in unversioned files
+        // AND still exist in git status (not reverted)
         for (const [filePath, changelistId] of Object.entries(persistedState.fileAssignments)) {
           // Skip if file is currently in unversioned - it should stay there
-          if (unversionedFilePaths.has(filePath)) {
+          if (currentUnversionedFilePaths.has(filePath)) {
+            continue;
+          }
+          
+          // Skip if file no longer exists in git status (was reverted)
+          if (!allValidFilePaths.has(filePath)) {
             continue;
           }
           
@@ -546,10 +563,26 @@ export class NativeTreeProvider
         }
       }
 
-      // Clear all changelists
+      // Clear all changelists and remove any files that no longer exist in git status
       for (const changelist of this.changelists) {
         changelist.files = [];
         changelist.hunks = [];
+      }
+      
+      // Clean up persisted file assignments for files that no longer exist in git status
+      if (persistedState && persistedState.fileAssignments) {
+        const validPaths = new Set([...gitFilePaths, ...unversionedFilePaths]);
+        const cleanedAssignments: Record<string, string> = {};
+        for (const [filePath, changelistId] of Object.entries(persistedState.fileAssignments)) {
+          if (validPaths.has(filePath)) {
+            cleanedAssignments[filePath] = changelistId;
+          }
+        }
+        // Update persisted state if it changed
+        if (Object.keys(cleanedAssignments).length !== Object.keys(persistedState.fileAssignments || {}).length) {
+          persistedState.fileAssignments = cleanedAssignments;
+          await this.context.workspaceState.update('changelists', persistedState);
+        }
       }
 
       // Distribute files to changelists based on their hunks
