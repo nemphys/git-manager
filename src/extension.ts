@@ -1,7 +1,7 @@
 // The module 'vscode' contains the VS Code extensibility API
 // Import the module and reference it with the alias vscode in your code below
 import * as vscode from 'vscode';
-import { NativeTreeProvider, ChangelistTreeItem, FileTreeItem } from './nativeTreeProvider';
+import { NativeTreeProvider, ChangelistTreeItem, FileTreeItem, UnversionedSectionTreeItem } from './nativeTreeProvider';
 import { GitService } from './gitService';
 import { FileItem, FileStatus, Hunk } from './types';
 import { CommitUI } from './commitUI';
@@ -147,30 +147,38 @@ export async function activate(context: vscode.ExtensionContext) {
     });
 
     // Handle collapse all to toggle to expand all
-    treeView.onDidCollapseElement((e) => {
+    treeView.onDidCollapseElement(async (e) => {
       // When user manually collapses items, update our state and the changelist state
       if (e.element instanceof ChangelistTreeItem) {
         const changelistItem = e.element as ChangelistTreeItem;
         const changelist = treeProvider.getChangelists().find((c) => c.id === changelistItem.changelist.id);
         if (changelist) {
           changelist.isExpanded = false;
+          // Persist the state change asynchronously
+          treeProvider.persistState();
         }
       } else if (e.element.contextValue === 'unversionedSection') {
+        // Update unversioned files section expansion state
+        treeProvider.setUnversionedFilesExpanded(false);
       }
       // Check if all changelists are collapsed
       const allCollapsed = treeProvider.getChangelists().every((c) => c.files.length === 0 || !c.isExpanded);
       isExpanded = !allCollapsed;
     });
 
-    treeView.onDidExpandElement((e) => {
+    treeView.onDidExpandElement(async (e) => {
       // When user manually expands items, update our state and the changelist state
       if (e.element instanceof ChangelistTreeItem) {
         const changelistItem = e.element as ChangelistTreeItem;
         const changelist = treeProvider.getChangelists().find((c) => c.id === changelistItem.changelist.id);
         if (changelist) {
           changelist.isExpanded = true;
+          // Persist the state change asynchronously
+          treeProvider.persistState();
         }
       } else if (e.element.contextValue === 'unversionedSection') {
+        // Update unversioned files section expansion state
+        treeProvider.setUnversionedFilesExpanded(true);
       }
       // Check if any changelist is expanded
       const anyExpanded = treeProvider.getChangelists().some((c) => c.files.length > 0 && c.isExpanded);
@@ -1411,8 +1419,74 @@ export async function activate(context: vscode.ExtensionContext) {
   }
 
   if (treeProvider) {
-    treeProvider.refresh();
+    // Refresh and wait for it to complete
+    await treeProvider.refresh();
     updateAllCommitUI();
+    
+    // Function to apply persisted expansion state
+    const applyExpansionState = async () => {
+      try {
+        // Get the actual tree items from the provider (these are what VS Code is using)
+        const rootItems = await treeProvider.getChildren();
+        const changelists = treeProvider.getChangelists();
+        
+        // Apply expansion state for each changelist
+        for (const changelist of changelists) {
+          // Only apply if changelist has files
+          if (changelist.files.length > 0) {
+            // Find the actual tree item from the root items
+            const changelistItem = rootItems.find(item => 
+              item instanceof ChangelistTreeItem && item.changelist.id === changelist.id
+            ) as ChangelistTreeItem | undefined;
+            
+            if (changelistItem) {
+              // Only apply if isExpanded is explicitly set (true or false)
+              // If undefined, getChildren() already handles default behavior (expand if has files)
+              if (changelist.isExpanded !== undefined) {
+                await treeView.reveal(changelistItem, { 
+                  expand: changelist.isExpanded, 
+                  select: false, 
+                  focus: false 
+                });
+              }
+            }
+          }
+        }
+        
+        // Also apply unversioned files section expansion state
+        const unversionedFiles = treeProvider.getUnversionedFiles();
+        if (unversionedFiles.length > 0) {
+          const unversionedExpanded = treeProvider.getUnversionedFilesExpanded();
+          const unversionedSection = rootItems.find(item => 
+            item instanceof UnversionedSectionTreeItem
+          );
+          if (unversionedSection) {
+            await treeView.reveal(unversionedSection, { 
+              expand: unversionedExpanded, 
+              select: false, 
+              focus: false 
+            });
+          }
+        }
+      } catch (error) {
+        // Silently handle errors - expansion state is not critical
+        console.error('Error applying persisted expansion state:', error);
+      }
+    };
+    
+    // Apply expansion state after initial tree data change (indicates tree is ready)
+    let expansionStateApplied = false;
+    const applyOnce = treeProvider.onDidChangeTreeData(async () => {
+      if (!expansionStateApplied) {
+        expansionStateApplied = true;
+        // Wait a bit for tree to render
+        setTimeout(applyExpansionState, 300);
+        applyOnce.dispose();
+      }
+    });
+    
+    // Also try applying after a delay as fallback
+    setTimeout(applyExpansionState, 1000);
     
     // Update decorations when tree data changes
     treeProvider.onDidChangeTreeData(() => {

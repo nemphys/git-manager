@@ -200,7 +200,8 @@ export class NativeTreeProvider
     this.workspaceRoot = workspaceRoot;
     this.context = context;
     this.gitService = new GitService(workspaceRoot);
-    this.initializeDefaultChangelist();
+    // Don't initialize default changelist here - it will be loaded from persisted state
+    // or initialized in loadPersistedChangelists if needed
   }
 
   private initializeDefaultChangelist() {
@@ -227,16 +228,25 @@ export class NativeTreeProvider
       
       if (persistedState && persistedState.changelists && persistedState.changelists.length > 0) {
         // Restore changelists from persisted state
-        this.changelists = persistedState.changelists.map((p) => ({
-          id: p.id,
-          name: p.name,
-          description: p.description,
-          files: [], // Files will be loaded from Git status
-          hunks: [], // Hunks will be loaded from Git status
-          isDefault: p.isDefault,
-          isExpanded: p.isExpanded ?? false,
-          createdAt: new Date(p.createdAt),
-        }));
+        this.changelists = persistedState.changelists.map((p) => {
+          const changelist: Changelist = {
+            id: p.id,
+            name: p.name,
+            description: p.description,
+            files: [], // Files will be loaded from Git status
+            hunks: [], // Hunks will be loaded from Git status
+            isDefault: p.isDefault,
+            createdAt: new Date(p.createdAt),
+          };
+          // Only set isExpanded if it was explicitly saved in the persisted state
+          // Use 'in' operator to check if property exists (handles both undefined and missing property)
+          if ('isExpanded' in p && p.isExpanded !== undefined && p.isExpanded !== null) {
+            changelist.isExpanded = p.isExpanded;
+          }
+          // If isExpanded is not set, it remains undefined, allowing default behavior (expand if has files)
+          // If isExpanded is not set, it remains undefined, allowing default behavior (expand if has files)
+          return changelist;
+        });
 
         // Ensure default changelist exists
         const hasDefault = this.changelists.some((c) => c.isDefault);
@@ -259,6 +269,11 @@ export class NativeTreeProvider
           // No active changelist persisted, default to default changelist
           const defaultChangelist = this.changelists.find((c) => c.isDefault);
           this.activeChangelistId = defaultChangelist?.id;
+        }
+
+        // Restore unversioned files section expansion state
+        if (persistedState.unversionedFilesExpanded !== undefined) {
+          this.unversionedFilesExpanded = persistedState.unversionedFilesExpanded;
         }
       } else {
         // No persisted state, initialize default
@@ -316,20 +331,28 @@ export class NativeTreeProvider
       // that have been assigned to changelists. These will be restored on next load.
 
       // Convert changelists to serializable format
-      const persistedChangelists = this.changelists.map((c) => ({
-        id: c.id,
-        name: c.name,
-        description: c.description,
-        isDefault: c.isDefault ?? false,
-        isExpanded: c.isExpanded,
-        createdAt: c.createdAt.toISOString(),
-      }));
+      const persistedChangelists = this.changelists.map((c) => {
+        const persisted: any = {
+          id: c.id,
+          name: c.name,
+          description: c.description,
+          isDefault: c.isDefault ?? false,
+          createdAt: c.createdAt.toISOString(),
+        };
+        // Only save isExpanded if it's explicitly set (not undefined)
+        // This allows the default behavior (expand if has files) to work for new/unchanged changelists
+        if (c.isExpanded !== undefined) {
+          persisted.isExpanded = c.isExpanded;
+        }
+        return persisted;
+      });
 
       const persistedState: import('./types').PersistedState = {
         changelists: persistedChangelists,
         fileAssignments,
         hunkAssignments,
         activeChangelistId: this.activeChangelistId,
+        unversionedFilesExpanded: this.unversionedFilesExpanded,
       };
 
       await this.context.workspaceState.update('changelists', persistedState);
@@ -344,6 +367,22 @@ export class NativeTreeProvider
     this.saveChangelists().catch((error) => {
       console.error('Error in async saveChangelists:', error);
     });
+  }
+
+  // Public method to persist state (useful for saving collapse/expand state)
+  persistState(): void {
+    this.saveChangelistsAsync();
+  }
+
+  // Synchronous version for critical state changes (like user expand/collapse)
+  async persistStateSync(): Promise<void> {
+    await this.saveChangelists();
+  }
+
+  // Method to update unversioned files section expansion state
+  setUnversionedFilesExpanded(expanded: boolean): void {
+    this.unversionedFilesExpanded = expanded;
+    this.persistState();
   }
 
   async refresh(): Promise<void> {
@@ -385,6 +424,9 @@ export class NativeTreeProvider
 
     // Also collapse unversioned files section
     this.unversionedFilesExpanded = false;
+
+    // Persist the state change
+    this.persistState();
 
     // Fire tree data change with undefined to force full tree refresh
     this._onDidChangeTreeData.fire(undefined);
@@ -1281,6 +1323,10 @@ export class NativeTreeProvider
     return this.unversionedFiles;
   }
 
+  getUnversionedFilesExpanded(): boolean {
+    return this.unversionedFilesExpanded;
+  }
+
   getAllFiles(): FileItem[] {
     const allFiles: FileItem[] = [];
 
@@ -1534,6 +1580,9 @@ export class NativeTreeProvider
     const targetChangelist = this.changelists.find((c) => c.id === targetChangelistId);
     if (targetChangelist && targetChangelist.files.length > 0) {
       targetChangelist.isExpanded = true;
+
+      // Persist the state change
+      this.persistState();
 
       // Emit event to force visual expansion
       this._onChangelistAutoExpand.fire(targetChangelist.id);

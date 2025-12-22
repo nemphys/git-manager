@@ -75,4 +75,5 @@ export interface PersistedState {
   fileAssignments: { [filePath: string]: string }; // file path → changelist ID
   hunkAssignments: { [hunkId: string]: string }; // hunk ID → changelist ID
   activeChangelistId?: string; // ID of the active changelist
+  unversionedFilesExpanded?: boolean; // Whether unversioned files section is expanded
 }
