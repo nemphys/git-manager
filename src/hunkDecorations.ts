@@ -304,16 +304,11 @@ export class HunkDecorationProvider {
     for (const hunk of hunks) {
       const changelistId = this.hunkAssignments.get(hunk.id) || hunk.changelistId || 'default';
       const decorationType = this.decorationTypes.get(changelistId);
-      
+
       if (!decorationType) {
         continue;
       }
 
-      // Create one decoration per line to form a continuous vertical box
-      // When the same decoration type is applied to consecutive lines, VS Code renders them as continuous
-      const startLine = Math.max(0, hunk.newStart - 1);
-      const endLine = Math.max(0, hunk.newStart + hunk.newLines - 2); // -2 because newStart is 1-based and we already -1
-      
       const hoverMessage = new vscode.MarkdownString(
         `**Hunk** (Lines ${hunk.newStart}-${hunk.newStart + hunk.newLines - 1})\n\n` +
         `Changelist: ${this.getChangelistName(changelistId)}\n` +
@@ -321,12 +316,61 @@ export class HunkDecorationProvider {
         `Right-click to move to different changelist`
       );
 
-      // Create one decoration per line in the hunk
+      // Determine which *new* file lines in this hunk actually contain changes.
+      // Git's hunk header newStart/newLines include context lines; we only want
+      // lines that exist in the new file and are changed (those that start with '+').
+      const changedNewLines: number[] = [];
+      let currentNewLine = hunk.newStart; // 1-based line number in the new file
+
+      if (hunk.content) {
+        const hunkLines = hunk.content.split('\n');
+        for (const diffLine of hunkLines) {
+          if (diffLine.startsWith('+')) {
+            // Added/changed line in the new file
+            changedNewLines.push(currentNewLine);
+            currentNewLine++;
+          } else if (diffLine.startsWith(' ')) {
+            // Context line that exists in the new file
+            currentNewLine++;
+          } else if (diffLine.startsWith('-')) {
+            // Deletion: affects only the old file, does not advance new-file line
+            continue;
+          } else {
+            // Non diff-content lines (e.g. "\ No newline at end of file") – ignore
+            continue;
+          }
+        }
+      }
+
+      // If we couldn't identify specific changed lines (e.g. malformed content),
+      // fall back to decorating the whole hunk range as before.
+      if (changedNewLines.length === 0) {
+        const startLine = Math.max(0, hunk.newStart - 1);
+        const endLine = Math.max(0, hunk.newStart + hunk.newLines - 2);
+
+        for (let line = startLine; line <= endLine; line++) {
+          const range = new vscode.Range(line, 0, line, 0);
+
+          const decoration: vscode.DecorationOptions = {
+            range: range,
+            hoverMessage: hoverMessage,
+          };
+
+          if (!decorationsByChangelist.has(changelistId)) {
+            decorationsByChangelist.set(changelistId, []);
+          }
+          decorationsByChangelist.get(changelistId)!.push(decoration);
+        }
+        continue;
+      }
+
+      // Create one decoration per *changed* line in the hunk.
       // The decoration type already has the icon set, so all lines will use the same icon
-      // When applied to consecutive lines, they appear as a continuous vertical box
-      for (let line = startLine; line <= endLine; line++) {
-        const range = new vscode.Range(line, 0, line, 0);
-        
+      // and still appear as a continuous vertical box for consecutive changed lines.
+      for (const newLine of changedNewLines) {
+        const zeroBasedLine = Math.max(0, newLine - 1);
+        const range = new vscode.Range(zeroBasedLine, 0, zeroBasedLine, 0);
+
         const decoration: vscode.DecorationOptions = {
           range: range,
           hoverMessage: hoverMessage,
