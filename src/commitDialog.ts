@@ -452,6 +452,115 @@ export class CommitDialog {
             /* Container for nested folders/files */
           }
           
+          /* Base checkbox styling to better match VS Code UI */
+          /* Native VS Code checkbox styling */
+          input[type="checkbox"],
+          .file-checkbox,
+          .hunk-checkbox,
+          .all-hunks-checkbox,
+          #amend-checkbox {
+            -webkit-appearance: none;
+            -moz-appearance: none;
+            appearance: none;
+            width: 18px;
+            height: 18px;
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            border: 1px solid var(--vscode-checkbox-border, var(--vscode-input-border));
+            background-color: var(--vscode-checkbox-background, var(--vscode-input-background));
+            border-radius: 3px;
+            cursor: pointer;
+            position: relative;
+            flex-shrink: 0;
+            transition: background-color 0.1s, border-color 0.1s;
+          }
+
+          input[type="checkbox"]:checked,
+          .file-checkbox:checked,
+          .hunk-checkbox:checked,
+          .all-hunks-checkbox:checked,
+          #amend-checkbox:checked {
+            background-color: var(--vscode-checkbox-selectBackground, var(--vscode-button-background));
+            border-color: var(--vscode-checkbox-selectBackground, var(--vscode-button-background));
+          }
+
+          input[type="checkbox"]:checked::before,
+          .file-checkbox:checked::before,
+          .hunk-checkbox:checked::before,
+          .all-hunks-checkbox:checked::before,
+          #amend-checkbox:checked::before {
+            content: '';
+            position: absolute;
+            left: 4px;
+            top: 1px;
+            width: 5px;
+            height: 9px;
+            border: solid var(--vscode-checkbox-selectForeground, var(--vscode-button-foreground));
+            border-width: 0 2px 2px 0;
+            transform: rotate(45deg);
+          }
+
+          input[type="checkbox"]:indeterminate,
+          .file-checkbox:indeterminate,
+          .hunk-checkbox:indeterminate,
+          .all-hunks-checkbox:indeterminate,
+          #amend-checkbox:indeterminate {
+            background-color: var(--vscode-checkbox-selectBackground, var(--vscode-button-background));
+            border-color: var(--vscode-checkbox-selectBackground, var(--vscode-button-background));
+          }
+
+          input[type="checkbox"]:indeterminate::before,
+          .file-checkbox:indeterminate::before,
+          .hunk-checkbox:indeterminate::before,
+          .all-hunks-checkbox:indeterminate::before,
+          #amend-checkbox:indeterminate::before {
+            content: '';
+            position: absolute;
+            left: 3px;
+            top: 6px;
+            width: 8px;
+            height: 2px;
+            background-color: var(--vscode-checkbox-selectForeground, var(--vscode-button-foreground));
+            border: none;
+            transform: none;
+          }
+
+          input[type="checkbox"]:hover,
+          .file-checkbox:hover,
+          .hunk-checkbox:hover,
+          .all-hunks-checkbox:hover,
+          #amend-checkbox:hover {
+            border-color: var(--vscode-focusBorder);
+          }
+
+          input[type="checkbox"]:checked:hover,
+          .file-checkbox:checked:hover,
+          .hunk-checkbox:checked:hover,
+          .all-hunks-checkbox:checked:hover,
+          #amend-checkbox:checked:hover {
+            background-color: var(--vscode-button-hoverBackground);
+            border-color: var(--vscode-button-hoverBackground);
+          }
+
+          input[type="checkbox"]:focus-visible,
+          .file-checkbox:focus-visible,
+          .hunk-checkbox:focus-visible,
+          .all-hunks-checkbox:focus-visible,
+          #amend-checkbox:focus-visible {
+            outline: 1px solid var(--vscode-focusBorder);
+            outline-offset: 2px;
+          }
+
+          input[type="checkbox"]:disabled,
+          .file-checkbox:disabled,
+          .hunk-checkbox:disabled,
+          .all-hunks-checkbox:disabled,
+          #amend-checkbox:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+          }
+          
           .file-item {
             display: flex;
             align-items: center;
@@ -470,11 +579,6 @@ export class CommitDialog {
           .file-item.active {
             background-color: var(--vscode-list-activeSelectionBackground);
             color: var(--vscode-list-activeSelectionForeground);
-          }
-          
-          .file-checkbox {
-            margin: 0;
-            cursor: pointer;
           }
           
           .file-status {
@@ -761,14 +865,8 @@ export class CommitDialog {
           
           .hunk-checkbox {
             margin: 0 4px 0 8px;
-            cursor: pointer;
             flex-shrink: 0;
             align-self: center;
-          }
-          
-          .hunk-checkbox:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
           }
           
           .hunk-header {
