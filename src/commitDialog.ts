@@ -276,6 +276,10 @@ export class CommitDialog {
 
     try {
       const diffContent = await this.gitService.getFileDiff(file.path, file.status);
+      const { originalContent, modifiedContent } = await this.gitService.getFileContentsForDiff(
+        file.path,
+        file.status
+      );
       const hunks = this.fileHunks.get(fileId) || [];
       const selectedHunks = this.selectedHunksByFile.get(fileId) || new Set();
       
@@ -283,6 +287,8 @@ export class CommitDialog {
         command: 'diffContent',
         fileId: fileId,
         diff: diffContent,
+        originalContent,
+        modifiedContent,
         hunks: hunks.map(h => {
           const hunkChangelistId = this.hunkAssignments.get(h.id) || h.changelistId || this.changelistId;
           const belongsToChangelist = hunkChangelistId === this.changelistId;
@@ -615,6 +621,7 @@ export class CommitDialog {
             display: flex;
             min-height: 20px;
             align-items: stretch;
+            position: relative;
           }
           
           .diff-line:hover {
@@ -717,6 +724,61 @@ export class CommitDialog {
             background-color: var(--vscode-editor-background);
           }
           
+          .diff-separator {
+            display: flex;
+            align-items: center;
+            justify-content: stretch;
+            padding: 8px 0;
+            gap: 10px;
+            color: var(--vscode-descriptionForeground);
+            font-size: 11px;
+            user-select: none;
+            background-color: var(--vscode-editor-background);
+            border-top: 1px solid var(--vscode-panel-border);
+            border-bottom: 1px solid var(--vscode-panel-border);
+            position: relative;
+            margin: 0;
+            width: 100%;
+            box-sizing: border-box;
+          }
+          
+          .diff-separator-line {
+            flex: 1 1 auto;
+            min-width: 0;
+            margin: 0;
+            display: flex;
+            align-items: center;
+            padding: 0;
+            position: relative;
+          }
+          
+          .diff-separator-line-inner {
+            width: 100%;
+            height: 1px;
+            /* Use line number foreground for good contrast across themes */
+            background-color: var(--vscode-editorLineNumber-foreground);
+            display: block;
+          }
+          
+          .diff-separator-text {
+            flex: 0 0 auto;
+            white-space: nowrap;
+            color: var(--vscode-descriptionForeground);
+            opacity: 0.7;
+            font-size: 10px;
+            padding: 0 8px;
+            background-color: var(--vscode-editor-background);
+            position: relative;
+            z-index: 1;
+          }
+          
+          .hunk-checkbox {
+            margin: 0 4px 0 8px;
+            cursor: pointer;
+            flex-shrink: 0;
+            align-self: center;
+          }
+          
           .hunk-checkbox:disabled {
             opacity: 0.5;
             cursor: not-allowed;
@@ -732,17 +794,50 @@ export class CommitDialog {
             gap: 8px;
             width: 100%;
             flex-shrink: 0;
-          }
-          
-          .hunk-checkbox {
-            margin: 0;
-            cursor: pointer;
+            border-left: 3px solid transparent;
           }
           
           .hunk-header-text {
             font-size: 11px;
             color: var(--vscode-descriptionForeground);
             font-family: var(--vscode-editor-font-family);
+          }
+
+          .diff-line.hunk-selected {
+            background-color: color-mix(in srgb, var(--vscode-diffEditor-insertedLineBackground) 40%, transparent);
+          }
+          
+          .diff-line.hunk-selected .diff-line-content {
+            background-color: color-mix(in srgb, var(--vscode-diffEditor-insertedLineBackground) 40%, transparent);
+          }
+
+          .diff-line.hunk-unselected {
+            background-color: color-mix(in srgb, var(--vscode-editor-inactiveSelectionBackground) 60%, transparent);
+          }
+          
+          .diff-line.hunk-unselected .diff-line-content {
+            background-color: color-mix(in srgb, var(--vscode-editor-inactiveSelectionBackground) 60%, transparent);
+            opacity: 0.85;
+          }
+          
+          .diff-line.hunk-unselected .diff-line-content.added {
+            background-color: color-mix(in srgb, var(--vscode-diffEditor-insertedLineBackground) 30%, var(--vscode-editor-inactiveSelectionBackground) 70%);
+          }
+          
+          .diff-line.hunk-unselected .diff-line-content.removed {
+            background-color: color-mix(in srgb, var(--vscode-diffEditor-removedLineBackground) 30%, var(--vscode-editor-inactiveSelectionBackground) 70%);
+          }
+
+          .hunk-disabled {
+            opacity: 0.5;
+          }
+
+          .hunk-header.hunk-selected {
+            border-left-color: var(--vscode-diffEditor-insertedTextBackground, #4ec9b0);
+          }
+
+          .hunk-header.hunk-unselected {
+            border-left-color: var(--vscode-editor-inactiveSelectionBackground);
           }
           
           .hunk-content {
@@ -1169,7 +1264,7 @@ export class CommitDialog {
                 }
                 break;
               case 'diffContent':
-                displayDiff(message.fileId, message.diff, message.hunks);
+                displayDiff(message.fileId, message.diff, message.hunks, message.originalContent, message.modifiedContent);
                 fileHunks[message.fileId] = message.hunks;
                 // Update hunk count for this file after diff is loaded
                 const fileItem = document.querySelector('[data-file-id="' + message.fileId + '"]');
@@ -1194,12 +1289,12 @@ export class CommitDialog {
             }
           });
           
-          function displayDiff(fileId, diffText, hunks) {
+          function displayDiff(fileId, diffText, hunks, originalContent, modifiedContent) {
             const diffSection = document.getElementById('diff-section');
             const diffContent = document.getElementById('diff-content');
             const diffHeader = document.getElementById('diff-header-text');
             
-            if (!diffText || diffText === 'Error loading diff') {
+            if ((!diffText || diffText === 'Error loading diff') && !originalContent && !modifiedContent) {
               diffContent.innerHTML = '<div class="diff-empty" style="display: flex; align-items: center; justify-content: center; height: 100%; color: var(--vscode-descriptionForeground); font-size: 13px;">Error loading diff</div>';
               diffHeader.textContent = 'Error';
               diffSection.style.display = 'flex';
@@ -1213,130 +1308,205 @@ export class CommitDialog {
             
             diffSection.style.display = 'flex';
             
-            // Parse diff and create side-by-side view
-            const lines = diffText.split('\\n');
-            let oldLines = [];
-            let newLines = [];
-            let oldLineNum = null;
-            let newLineNum = null;
-            let currentHunkIndex = 0;
-            let hunkHeaders = [];
+            // Build full-file line models for original and modified contents
+            const originalLines = (originalContent || '').split('\\n');
+            const modifiedLines = (modifiedContent || '').split('\\n');
+
+            // Parse diff text to determine line types (added/removed/context)
+            const originalLineTypes = new Array(originalLines.length).fill('context');
+            const modifiedLineTypes = new Array(modifiedLines.length).fill('context');
             
-            // Process diff lines
-            for (let i = 0; i < lines.length; i++) {
-              const line = lines[i];
+            if (diffText && diffText !== 'Error loading diff') {
+              const diffLines = diffText.split('\\n');
+              let oldLineNum = 0;
+              let newLineNum = 0;
               
-              // File header - skip
-              if (line.startsWith('---') || line.startsWith('+++')) {
-                continue;
-              }
-              
-              // Hunk header
-              if (line.startsWith('@@')) {
-                // Find matching hunk
-                let matchingHunk = null;
-                const match = line.match(/@@ -(\\d+)(?:,(\\d+))? \\+(\\d+)(?:,(\\d+))? @@/);
-                if (match) {
-                  const hunkOldStart = parseInt(match[1]);
-                  const hunkNewStart = parseInt(match[3]);
-                  
-                  // Find matching hunk from the hunks array
-                  for (let j = 0; j < hunks.length; j++) {
-                    const hunk = hunks[j];
-                    if (hunk.oldStart === hunkOldStart && hunk.newStart === hunkNewStart) {
-                      matchingHunk = hunk;
-                      currentHunkIndex = j;
-                      break;
-                    }
+              for (const line of diffLines) {
+                if (line.startsWith('@@')) {
+                  // Hunk header - extract line numbers
+                  const match = line.match(/@@ -(\\d+)(?:,(\\d+))? \\+(\\d+)(?:,(\\d+))? @@/);
+                  if (match) {
+                    oldLineNum = parseInt(match[1], 10) - 1; // Convert to 0-based index
+                    newLineNum = parseInt(match[3], 10) - 1;
                   }
-                  
-                  // If no exact match, use next hunk in sequence
-                  if (!matchingHunk && currentHunkIndex < hunks.length) {
-                    matchingHunk = hunks[currentHunkIndex];
-                  }
-                  
-                  // Store hunk header with actual start line numbers
-                  currentHunkHeader = {
-                    line: line,
-                    hunk: matchingHunk,
-                    oldStart: hunkOldStart,
-                    newStart: hunkNewStart,
-                    inserted: false
-                  };
-                  hunkHeaders.push(currentHunkHeader);
-                  
-                  // Set line numbers for the lines that follow this hunk
-                  oldLineNum = hunkOldStart;
-                  newLineNum = hunkNewStart;
+                  continue;
                 }
-                continue;
-              }
-              
-              // Diff lines - build parallel arrays
-              // Track if this is the first line after a hunk header
-              const isFirstLineOfHunk = currentHunkHeader && !currentHunkHeader.inserted;
-              
-              if (line.startsWith('+') && !line.startsWith('+++')) {
-                oldLines.push({ type: 'empty', num: null, content: '', hunkHeader: isFirstLineOfHunk ? currentHunkHeader : null });
-                newLines.push({ type: 'added', num: newLineNum, content: line.substring(1), hunkHeader: isFirstLineOfHunk ? currentHunkHeader : null });
-                if (isFirstLineOfHunk) currentHunkHeader.inserted = true;
-                if (newLineNum !== null) newLineNum++;
-              } else if (line.startsWith('-') && !line.startsWith('---')) {
-                oldLines.push({ type: 'removed', num: oldLineNum, content: line.substring(1), hunkHeader: isFirstLineOfHunk ? currentHunkHeader : null });
-                newLines.push({ type: 'empty', num: null, content: '', hunkHeader: null });
-                if (isFirstLineOfHunk) currentHunkHeader.inserted = true;
-                if (oldLineNum !== null) oldLineNum++;
-              } else if (line.startsWith(' ')) {
-                oldLines.push({ type: 'context', num: oldLineNum, content: line.substring(1), hunkHeader: isFirstLineOfHunk ? currentHunkHeader : null });
-                newLines.push({ type: 'context', num: newLineNum, content: line.substring(1), hunkHeader: isFirstLineOfHunk ? currentHunkHeader : null });
-                if (isFirstLineOfHunk) currentHunkHeader.inserted = true;
-                if (oldLineNum !== null) oldLineNum++;
-                if (newLineNum !== null) newLineNum++;
-              } else if (line.trim() === '') {
-                oldLines.push({ type: 'context', num: oldLineNum, content: '', hunkHeader: isFirstLineOfHunk ? currentHunkHeader : null });
-                newLines.push({ type: 'context', num: newLineNum, content: '', hunkHeader: isFirstLineOfHunk ? currentHunkHeader : null });
-                if (isFirstLineOfHunk) currentHunkHeader.inserted = true;
-                if (oldLineNum !== null) oldLineNum++;
-                if (newLineNum !== null) newLineNum++;
+                
+                if (line.startsWith('---') || line.startsWith('+++')) {
+                  continue;
+                }
+                
+                if (line.startsWith('-') && !line.startsWith('---')) {
+                  // Removed line
+                  if (oldLineNum >= 0 && oldLineNum < originalLineTypes.length) {
+                    originalLineTypes[oldLineNum] = 'removed';
+                  }
+                  oldLineNum++;
+                } else if (line.startsWith('+') && !line.startsWith('+++')) {
+                  // Added line
+                  if (newLineNum >= 0 && newLineNum < modifiedLineTypes.length) {
+                    modifiedLineTypes[newLineNum] = 'added';
+                  }
+                  newLineNum++;
+                } else if (line.startsWith(' ')) {
+                  // Context line (unchanged)
+                  oldLineNum++;
+                  newLineNum++;
+                }
               }
             }
+
+            // Map line numbers to hunk metadata
+            const originalLineMeta = [];
+            const modifiedLineMeta = [];
+
+            for (let i = 0; i < originalLines.length; i++) {
+              originalLineMeta.push({
+                num: i + 1,
+                content: originalLines[i],
+                type: originalLineTypes[i] || 'context',
+                hunk: null,
+                isFirstInHunk: false
+              });
+            }
+
+            for (let i = 0; i < modifiedLines.length; i++) {
+              modifiedLineMeta.push({
+                num: i + 1,
+                content: modifiedLines[i],
+                type: modifiedLineTypes[i] || 'context',
+                hunk: null,
+                isFirstInHunk: false
+              });
+            }
+
+            // Attach hunk references to the corresponding line ranges
+            (hunks || []).forEach(h => {
+              const isSelected = h.isSelected;
+              const belongsToChangelist = h.belongsToChangelist;
+
+              // Old side range
+              const oldStartIndex = (h.oldStart || 1) - 1;
+              const oldEndIndex = oldStartIndex + (h.oldLines || 0);
+              for (let i = oldStartIndex; i < oldEndIndex && i < originalLineMeta.length; i++) {
+                originalLineMeta[i].hunk = {
+                  id: h.id,
+                  isSelected,
+                  belongsToChangelist
+                };
+                if (i === oldStartIndex) {
+                  originalLineMeta[i].isFirstInHunk = true;
+                }
+              }
+
+              // New side range
+              const newStartIndex = (h.newStart || 1) - 1;
+              const newEndIndex = newStartIndex + (h.newLines || 0);
+              for (let i = newStartIndex; i < newEndIndex && i < modifiedLineMeta.length; i++) {
+                modifiedLineMeta[i].hunk = {
+                  id: h.id,
+                  isSelected,
+                  belongsToChangelist
+                };
+                if (i === newStartIndex) {
+                  modifiedLineMeta[i].isFirstInHunk = true;
+                }
+              }
+            });
+
+            // Determine which lines to show (only hunks + context)
+            const CONTEXT_LINES = 3; // Number of context lines before/after each hunk
+            const linesToShowOriginal = new Set();
+            const linesToShowModified = new Set();
             
-            // Render side-by-side with hunk headers
-            let html = '';
-            let hunkHeaderIndex = 0;
-            let oldLineIndex = 0;
-            let newLineIndex = 0;
-            
-            // Build combined structure with hunk headers
-            html += '<div class="diff-sides-container">';
-            
-            // Left side (old)
-            html += '<div class="diff-side">';
-            html += '<div class="diff-side-header">Original</div>';
-            oldLineIndex = 0;
-            hunkHeaderIndex = 0;
-            
-            for (let i = 0; i < oldLines.length; i++) {
-              const oldLine = oldLines[i];
+            // Collect all hunk ranges with context
+            (hunks || []).forEach(h => {
+              const oldStartIndex = (h.oldStart || 1) - 1;
+              const oldEndIndex = oldStartIndex + (h.oldLines || 0);
+              const newStartIndex = (h.newStart || 1) - 1;
+              const newEndIndex = newStartIndex + (h.newLines || 0);
               
-              // Check if this line has a hunk header attached (first line of a hunk)
-              // On the left side, we only show the hunk header text, no checkbox
-              if (oldLine.hunkHeader) {
-                const hunkHeader = oldLine.hunkHeader;
-                html += '<div class="hunk-header">';
-                html += '<span class="hunk-header-text">' + escapeHtml(hunkHeader.line) + '</span>';
-                html += '</div>';
+              // Add context before
+              const contextStartOld = Math.max(0, oldStartIndex - CONTEXT_LINES);
+              const contextStartNew = Math.max(0, newStartIndex - CONTEXT_LINES);
+              
+              // Add hunk lines
+              for (let i = oldStartIndex; i < oldEndIndex && i < originalLineMeta.length; i++) {
+                linesToShowOriginal.add(i);
+              }
+              for (let i = newStartIndex; i < newEndIndex && i < modifiedLineMeta.length; i++) {
+                linesToShowModified.add(i);
               }
               
-              html += '<div class="diff-line">';
-              html += '<div class="diff-line-number' + (oldLine.type === 'removed' ? ' old' : '') + '">' + (oldLine.num !== null ? oldLine.num : '') + '</div>';
-              html += '<div class="diff-line-content ' + (oldLine.type === 'empty' ? 'empty' : oldLine.type) + '">' + escapeHtml(oldLine.content) + '</div>';
+              // Add context after
+              const contextEndOld = Math.min(originalLineMeta.length, oldEndIndex + CONTEXT_LINES);
+              const contextEndNew = Math.min(modifiedLineMeta.length, newEndIndex + CONTEXT_LINES);
+              
+              for (let i = contextStartOld; i < contextEndOld; i++) {
+                linesToShowOriginal.add(i);
+              }
+              for (let i = contextStartNew; i < contextEndNew; i++) {
+                linesToShowModified.add(i);
+              }
+            });
+            
+            // Convert to sorted arrays for rendering
+            const sortedOriginalLines = Array.from(linesToShowOriginal).sort((a, b) => a - b);
+            const sortedModifiedLines = Array.from(linesToShowModified).sort((a, b) => a - b);
+            
+            // If no hunks, show all lines (fallback)
+            if (sortedOriginalLines.length === 0 && sortedModifiedLines.length === 0) {
+              for (let i = 0; i < originalLineMeta.length; i++) {
+                sortedOriginalLines.push(i);
+              }
+              for (let i = 0; i < modifiedLineMeta.length; i++) {
+                sortedModifiedLines.push(i);
+              }
+            }
+
+            // Render side-by-side without hunk headers, with inline checkboxes
+            let html = '';
+            
+            html += '<div class="diff-sides-container">';
+            
+            // Left side (old/original)
+            html += '<div class="diff-side" id="diff-side-original">';
+            html += '<div class="diff-side-header">Original</div>';
+            
+            for (let idx = 0; idx < sortedOriginalLines.length; idx++) {
+              const i = sortedOriginalLines[idx];
+              const lineMeta = originalLineMeta[i];
+              const hunkInfo = lineMeta.hunk;
+              const hunkClass = hunkInfo
+                ? (hunkInfo.isSelected ? 'hunk-selected' : 'hunk-unselected')
+                : '';
+              
+              // Check if we should show a separator (gap in line numbers)
+              const gapSize = idx > 0 ? (sortedOriginalLines[idx] - sortedOriginalLines[idx - 1] - 1) : 0;
+              const showSeparator = gapSize > 0;
+
+              if (showSeparator) {
+                const prevLineNum = sortedOriginalLines[idx - 1] + 1;
+                const nextLineNum = sortedOriginalLines[idx] + 1;
+                const skippedLines = gapSize;
+                html += '<div class="diff-separator">';
+                html += '<div class="diff-separator-line"><span class="diff-separator-line-inner"></span></div>';
+                html += '<div class="diff-separator-text">' + skippedLines + ' line' + (skippedLines !== 1 ? 's' : '') + ' hidden (lines ' + prevLineNum + '–' + (nextLineNum - 1) + ')</div>';
+                html += '<div class="diff-separator-line"><span class="diff-separator-line-inner"></span></div>';
+                html += '</div>';
+              }
+
+              html += '<div class="diff-line ' + hunkClass + '"' + (hunkInfo ? ' data-hunk-id="' + escapeHtml(hunkInfo.id) + '"' : '') + '>';
+              // Spacer to align with modified side checkboxes
+              html += '<div style="width: 20px; flex-shrink: 0;"></div>';
+              html += '<div class="diff-line-number' + (lineMeta.type === 'removed' ? ' old' : '') + '">' + (lineMeta.num || '') + '</div>';
+              html += '<div class="diff-line-content ' + lineMeta.type + '">' + escapeHtml(lineMeta.content) + '</div>';
               html += '</div>';
             }
             html += '</div>';
             
-            // Right side (new)
-            html += '<div class="diff-side">';
+            // Right side (new/modified)
+            html += '<div class="diff-side" id="diff-side-modified">';
             // Determine all-hunks checkbox state for this file
             const selectedHunksForFile = selectedHunks[fileId] || [];
             const selectableHunks = (hunks || []).filter(h => h.belongsToChangelist);
@@ -1349,31 +1519,46 @@ export class CommitDialog {
                     ' />';
             html += '<span>Modified</span>';
             html += '</div>';
-            newLineIndex = 0;
-            hunkHeaderIndex = 0;
-            
-            for (let i = 0; i < newLines.length; i++) {
-              const newLine = newLines[i];
+
+            for (let idx = 0; idx < sortedModifiedLines.length; idx++) {
+              const i = sortedModifiedLines[idx];
+              const lineMeta = modifiedLineMeta[i];
+              const hunkInfo = lineMeta.hunk;
+              const hunkClass = hunkInfo
+                ? (hunkInfo.isSelected ? 'hunk-selected' : 'hunk-unselected')
+                : '';
               
-              // Check if this line has a hunk header attached (first line of a hunk)
-              if (newLine.hunkHeader) {
-                const hunkHeader = newLine.hunkHeader;
-                const hunk = hunkHeader.hunk;
-                html += '<div class="hunk-header">';
-                if (hunk) {
-                  const disabled = !hunk.belongsToChangelist;
-                  html += '<input type="checkbox" class="hunk-checkbox" data-file-id="' + fileId + '" data-hunk-id="' + hunk.id + '" ' + 
-                          (hunk.isSelected ? 'checked' : '') + ' ' + (disabled ? 'disabled' : '') + ' />';
-                } else {
-                  html += '<input type="checkbox" class="hunk-checkbox" disabled />';
-                }
-                html += '<span class="hunk-header-text">' + escapeHtml(hunkHeader.line) + '</span>';
+              // Check if we should show a separator (gap in line numbers)
+              const gapSize = idx > 0 ? (sortedModifiedLines[idx] - sortedModifiedLines[idx - 1] - 1) : 0;
+              const showSeparator = gapSize > 0;
+
+              if (showSeparator) {
+                const prevLineNum = sortedModifiedLines[idx - 1] + 1;
+                const nextLineNum = sortedModifiedLines[idx] + 1;
+                const skippedLines = gapSize;
+                html += '<div class="diff-separator">';
+                html += '<div class="diff-separator-line"><span class="diff-separator-line-inner"></span></div>';
+                html += '<div class="diff-separator-text">' + skippedLines + ' line' + (skippedLines !== 1 ? 's' : '') + ' hidden (lines ' + prevLineNum + '–' + (nextLineNum - 1) + ')</div>';
+                html += '<div class="diff-separator-line"><span class="diff-separator-line-inner"></span></div>';
                 html += '</div>';
               }
+
+              html += '<div class="diff-line ' + hunkClass + '"' + (hunkInfo ? ' data-hunk-id="' + escapeHtml(hunkInfo.id) + '"' : '') + '>';
               
-              html += '<div class="diff-line">';
-              html += '<div class="diff-line-number' + (newLine.type === 'added' ? ' new' : '') + '">' + (newLine.num !== null ? newLine.num : '') + '</div>';
-              html += '<div class="diff-line-content ' + (newLine.type === 'empty' ? 'empty' : newLine.type) + '">' + escapeHtml(newLine.content) + '</div>';
+              // Add checkbox inline with first line of hunk (no separate header)
+              if (lineMeta.isFirstInHunk && hunkInfo) {
+                const disabled = !hunkInfo.belongsToChangelist;
+                html += '<input type="checkbox" class="hunk-checkbox" data-file-id="' + fileId + '" data-hunk-id="' + hunkInfo.id + '"' +
+                        (hunkInfo.isSelected ? ' checked' : '') +
+                        (disabled ? ' disabled' : '') +
+                        ' />';
+              } else {
+                // Empty space to align with lines that have checkboxes
+                html += '<div style="width: 20px; flex-shrink: 0;"></div>';
+              }
+              
+              html += '<div class="diff-line-number' + (lineMeta.type === 'added' ? ' new' : '') + '">' + (lineMeta.num || '') + '</div>';
+              html += '<div class="diff-line-content ' + lineMeta.type + '">' + escapeHtml(lineMeta.content) + '</div>';
               html += '</div>';
             }
             html += '</div>';
@@ -1436,6 +1621,156 @@ export class CommitDialog {
                   vscode.postMessage({ command: 'selectAllHunks', fileId: fileId, select: select });
                   return false;
                 }
+              });
+            });
+
+            // Synced scrolling between original and modified panes based on visible hunks
+            // Use requestAnimationFrame to ensure DOM is fully rendered and layout is complete
+            requestAnimationFrame(() => {
+              requestAnimationFrame(() => {
+                const originalSide = document.getElementById('diff-side-original');
+                const modifiedSide = document.getElementById('diff-side-modified');
+                
+                if (!originalSide || !modifiedSide) return;
+                
+                let syncingFromOriginal = false;
+                let syncingFromModified = false;
+
+                // Find the hunk that is most visible and get its relative position in viewport
+                function findVisibleHunkWithPosition(container) {
+                  const scrollTop = container.scrollTop;
+                  const viewportHeight = container.clientHeight;
+                  const viewportTop = scrollTop;
+                  const viewportBottom = scrollTop + viewportHeight;
+                  const viewportCenter = scrollTop + viewportHeight / 2;
+                  
+                  // Get all lines with hunk IDs, grouped by hunk
+                  const hunkGroups = new Map();
+                  const lines = container.querySelectorAll('.diff-line[data-hunk-id]');
+                  
+                  for (const line of lines) {
+                    const hunkId = line.getAttribute('data-hunk-id');
+                    if (!hunkId) continue;
+                    
+                    if (!hunkGroups.has(hunkId)) {
+                      hunkGroups.set(hunkId, []);
+                    }
+                    hunkGroups.get(hunkId).push(line);
+                  }
+                  
+                  let bestHunk = null;
+                  let bestScore = -1;
+                  let bestHunkTop = 0;
+                  let bestHunkBottom = 0;
+                  
+                  // For each hunk, calculate how much of it is visible
+                  for (const [hunkId, hunkLines] of hunkGroups.entries()) {
+                    if (hunkLines.length === 0) continue;
+                    
+                    // Find the top and bottom of this hunk group
+                    let hunkTop = Infinity;
+                    let hunkBottom = -Infinity;
+                    
+                    for (const line of hunkLines) {
+                      const lineOffset = line.offsetTop;
+                      const lineHeight = line.offsetHeight;
+                      hunkTop = Math.min(hunkTop, lineOffset);
+                      hunkBottom = Math.max(hunkBottom, lineOffset + lineHeight);
+                    }
+                    
+                    // Calculate how much of this hunk is visible
+                    const visibleTop = Math.max(viewportTop, hunkTop);
+                    const visibleBottom = Math.min(viewportBottom, hunkBottom);
+                    const visibleHeight = Math.max(0, visibleBottom - visibleTop);
+                    const hunkHeight = hunkBottom - hunkTop;
+                    const visibilityRatio = hunkHeight > 0 ? visibleHeight / hunkHeight : 0;
+                    
+                    // Also consider distance from viewport center
+                    const hunkCenter = (hunkTop + hunkBottom) / 2;
+                    const distanceFromCenter = Math.abs(hunkCenter - viewportCenter);
+                    const maxDistance = viewportHeight;
+                    const distanceScore = 1 - Math.min(1, distanceFromCenter / maxDistance);
+                    
+                    // Combined score: visibility ratio + distance score
+                    const score = visibilityRatio * 0.7 + distanceScore * 0.3;
+                    
+                    if (score > bestScore) {
+                      bestScore = score;
+                      bestHunk = hunkId;
+                      bestHunkTop = hunkTop;
+                      bestHunkBottom = hunkBottom;
+                    }
+                  }
+                  
+                  if (!bestHunk) return null;
+                  
+                  // Calculate relative position: where is the hunk top relative to viewport top (0-1)
+                  const relativePosition = (bestHunkTop - viewportTop) / viewportHeight;
+                  
+                  return {
+                    hunkId: bestHunk,
+                    relativePosition: relativePosition,
+                    hunkTop: bestHunkTop,
+                    hunkBottom: bestHunkBottom
+                  };
+                }
+
+                // Scroll target pane to show the same hunk at the same relative position
+                function scrollTargetToMatchSource(targetContainer, hunkInfo) {
+                  if (!hunkInfo || !hunkInfo.hunkId) return;
+                  
+                  const firstLine = targetContainer.querySelector('.diff-line[data-hunk-id="' + hunkInfo.hunkId + '"]');
+                  if (!firstLine) return;
+                  
+                  // Find all lines of this hunk in target
+                  const hunkLines = targetContainer.querySelectorAll('.diff-line[data-hunk-id="' + hunkInfo.hunkId + '"]');
+                  if (hunkLines.length === 0) return;
+                  
+                  // Calculate hunk bounds in target
+                  let targetHunkTop = Infinity;
+                  for (const line of hunkLines) {
+                    targetHunkTop = Math.min(targetHunkTop, line.offsetTop);
+                  }
+                  
+                  // Calculate target scroll position to match relative position
+                  const viewportHeight = targetContainer.clientHeight;
+                  const targetScroll = targetHunkTop - (hunkInfo.relativePosition * viewportHeight);
+                  
+                  // Use instant scrolling for synchronous updates (no animation)
+                  targetContainer.scrollTop = Math.max(0, targetScroll);
+                }
+
+                originalSide.addEventListener('scroll', () => {
+                  // Only sync if not already syncing from modified side
+                  if (syncingFromModified) return;
+                  
+                  syncingFromOriginal = true;
+                  
+                  const hunkInfo = findVisibleHunkWithPosition(originalSide);
+                  if (hunkInfo) {
+                    scrollTargetToMatchSource(modifiedSide, hunkInfo);
+                  }
+                  
+                  requestAnimationFrame(() => {
+                    syncingFromOriginal = false;
+                  });
+                }, { passive: true });
+
+                modifiedSide.addEventListener('scroll', () => {
+                  // Only sync if not already syncing from original side
+                  if (syncingFromOriginal) return;
+                  
+                  syncingFromModified = true;
+                  
+                  const hunkInfo = findVisibleHunkWithPosition(modifiedSide);
+                  if (hunkInfo) {
+                    scrollTargetToMatchSource(originalSide, hunkInfo);
+                  }
+                  
+                  requestAnimationFrame(() => {
+                    syncingFromModified = false;
+                  });
+                }, { passive: true });
               });
             });
           }

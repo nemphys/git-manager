@@ -217,6 +217,86 @@ export class GitService {
     }
   }
 
+  /**
+   * Returns the original (base) and modified (working tree) contents for a file,
+   * suitable for side‑by‑side diff rendering.
+   *
+   * - MODIFIED / RENAMED: original = content from HEAD, modified = current workspace file
+   * - ADDED / UNTRACKED:  original = empty,           modified = current workspace file
+   * - DELETED:            original = content from HEAD, modified = empty
+   */
+  async getFileContentsForDiff(
+    filePath: string,
+    status: FileStatus
+  ): Promise<{ originalContent: string; modifiedContent: string }> {
+    try {
+      const absolutePath = path.join(this.workspaceRoot, filePath);
+
+      // Helper to safely read workspace file (returns '' if missing)
+      const readWorkspaceFile = (): string => {
+        try {
+          if (fs.existsSync(absolutePath)) {
+            return fs.readFileSync(absolutePath, 'utf8');
+          }
+        } catch {
+          // Ignore and fall through to empty string
+        }
+        return '';
+      };
+
+      // Deleted files – show content only on the left (original)
+      if (status === FileStatus.DELETED) {
+        try {
+          const { stdout } = await this.executeGitCommand(['show', `HEAD:${filePath}`]);
+          return {
+            originalContent: stdout,
+            modifiedContent: '',
+          };
+        } catch {
+          return {
+            originalContent: '',
+            modifiedContent: '',
+          };
+        }
+      }
+
+      // Added / untracked – only current workspace content on the right (modified)
+      if (status === FileStatus.ADDED || status === FileStatus.UNTRACKED) {
+        const modifiedContent = readWorkspaceFile();
+        return {
+          originalContent: '',
+          modifiedContent,
+        };
+      }
+
+      // Modified / renamed – HEAD content on the left, workspace on the right
+      try {
+        const [headResult] = await Promise.all([
+          this.executeGitCommand(['show', `HEAD:${filePath}`]),
+        ]);
+        const originalContent = headResult.stdout;
+        const modifiedContent = readWorkspaceFile();
+        return {
+          originalContent,
+          modifiedContent,
+        };
+      } catch {
+        // Fallback: if HEAD content is not available (e.g. new repo), just show workspace content
+        const modifiedContent = readWorkspaceFile();
+        return {
+          originalContent: '',
+          modifiedContent,
+        };
+      }
+    } catch (error) {
+      console.error('Error getting file contents for diff:', error);
+      return {
+        originalContent: '',
+        modifiedContent: '',
+      };
+    }
+  }
+
   async addFileToGit(filePath: string): Promise<boolean> {
     try {
       await this.executeGitCommand(['add', filePath]);
