@@ -298,6 +298,7 @@ export class CommitDialog {
             oldLines: h.oldLines,
             newStart: h.newStart,
             newLines: h.newLines,
+            content: h.content, // Include content to detect removed lines
             isSelected: selectedHunks.has(h.id),
             belongsToChangelist: belongsToChangelist,
             changelistId: hunkChangelistId,
@@ -746,7 +747,13 @@ export class CommitDialog {
           }
           
           .diff-line-number.new {
-            background-color: var(--vscode-diffEditor-insertedLineBackground);
+            background-color: rgba(76, 175, 80, 0.2);
+          }
+          
+          /* Modified lines (changed lines) - line numbers should be blueish when hunk is selected */
+          .diff-line.hunk-selected .diff-line-number.old,
+          .diff-line.hunk-selected .diff-line-number.new {
+            background-color: color-mix(in srgb, var(--vscode-button-background, #007acc) 30%, transparent);
           }
           
           .diff-line-number.new::after {
@@ -768,8 +775,14 @@ export class CommitDialog {
             position: relative;
           }
           
+          /* Default: greenish background for pure additions */
           .diff-line-content.added {
             background-color: var(--vscode-diffEditor-insertedLineBackground);
+          }
+          
+          /* CRITICAL FIX: Pure additions (no hunk-selected/hunk-unselected) MUST be green - hard-coded greenish color */
+          .diff-line:not(.hunk-selected):not(.hunk-unselected) .diff-line-content.added {
+            background-color: rgba(76, 175, 80, 0.2) !important;
           }
           
           .diff-line-content.added::before {
@@ -785,7 +798,8 @@ export class CommitDialog {
           }
           
           .diff-line-content.removed {
-            background-color: var(--vscode-diffEditor-removedLineBackground);
+            /* Hard-coded greyish background for deleted lines */
+            background-color: rgba(128, 128, 128, 0.2);
           }
           
           .diff-line-content.removed::before {
@@ -813,6 +827,15 @@ export class CommitDialog {
           
           .diff-line-content.empty {
             background-color: var(--vscode-editor-background);
+          }
+          
+          /* Changed lines (modified): bluish background - overrides default green for hunk-selected */
+          .diff-line.hunk-selected .diff-line-content.added {
+            background-color: color-mix(in srgb, var(--vscode-button-background, #007acc) 30%, transparent);
+          }
+          
+          .diff-line.hunk-selected .diff-line-content.removed {
+            background-color: color-mix(in srgb, var(--vscode-button-background, #007acc) 30%, transparent);
           }
           
           .diff-separator {
@@ -851,6 +874,19 @@ export class CommitDialog {
             display: block;
           }
           
+          /* Dashed line for addition/deletion separators to distinguish from "lines hidden" markers */
+          .diff-separator-line-dashed {
+            background-color: transparent;
+            border-top: 1px dashed var(--vscode-editorLineNumber-foreground);
+            height: 0;
+          }
+          
+          /* Optional: Make addition/deletion separators slightly more subtle */
+          .diff-separator-addition,
+          .diff-separator-deletion {
+            padding: 4px 0;
+          }
+          
           .diff-separator-text {
             flex: 0 0 auto;
             white-space: nowrap;
@@ -864,9 +900,20 @@ export class CommitDialog {
           }
           
           .hunk-checkbox {
-            margin: 0 4px 0 8px;
+            margin: 0;
             flex-shrink: 0;
             align-self: center;
+            margin-left: 8px;
+            margin-right: 4px;
+          }
+          
+          /* Container for checkbox or spacer to ensure consistent alignment */
+          .diff-line-checkbox-container {
+            width: 30px;
+            display: flex;
+            align-items: center;
+            justify-content: flex-start;
+            flex-shrink: 0;
           }
           
           .hunk-header {
@@ -889,11 +936,33 @@ export class CommitDialog {
           }
 
           .diff-line.hunk-selected {
-            background-color: color-mix(in srgb, var(--vscode-diffEditor-insertedLineBackground) 40%, transparent);
+            background-color: color-mix(in srgb, var(--vscode-button-background, #007acc) 30%, transparent);
           }
           
           .diff-line.hunk-selected .diff-line-content {
-            background-color: color-mix(in srgb, var(--vscode-diffEditor-insertedLineBackground) 40%, transparent);
+            background-color: color-mix(in srgb, var(--vscode-button-background, #007acc) 30%, transparent);
+          }
+          
+          /* CRITICAL: Ensure pure additions (without hunk-selected) stay green - hard-coded greenish color */
+          .diff-line:not(.hunk-selected):not(.hunk-unselected) .diff-line-content.added {
+            background-color: rgba(76, 175, 80, 0.2) !important;
+          }
+          
+          /* Lines from other changelists: muted greyish */
+          .diff-line.other-changelist {
+            opacity: 0.6;
+          }
+          
+          .diff-line.other-changelist .diff-line-content {
+            background-color: color-mix(in srgb, var(--vscode-descriptionForeground) 10%, var(--vscode-editor-background));
+          }
+          
+          .diff-line.other-changelist .diff-line-content.added {
+            background-color: color-mix(in srgb, var(--vscode-diffEditor-insertedLineBackground) 30%, var(--vscode-descriptionForeground) 10%, var(--vscode-editor-background) 60%);
+          }
+          
+          .diff-line.other-changelist .diff-line-content.removed {
+            background-color: color-mix(in srgb, var(--vscode-descriptionForeground) 12%, var(--vscode-editor-background));
           }
 
           .diff-line.hunk-unselected {
@@ -910,7 +979,7 @@ export class CommitDialog {
           }
           
           .diff-line.hunk-unselected .diff-line-content.removed {
-            background-color: color-mix(in srgb, var(--vscode-diffEditor-removedLineBackground) 30%, var(--vscode-editor-inactiveSelectionBackground) 70%);
+            background-color: color-mix(in srgb, color-mix(in srgb, var(--vscode-descriptionForeground) 15%, var(--vscode-editor-background)) 30%, var(--vscode-editor-inactiveSelectionBackground) 70%);
           }
 
           .hunk-disabled {
@@ -1380,6 +1449,7 @@ export class CommitDialog {
           });
           
           function displayDiff(fileId, diffText, hunks, originalContent, modifiedContent) {
+            try {
             const diffSection = document.getElementById('diff-section');
             const diffContent = document.getElementById('diff-content');
             const diffHeader = document.getElementById('diff-header-text');
@@ -1402,9 +1472,13 @@ export class CommitDialog {
             const originalLines = (originalContent || '').split('\\n');
             const modifiedLines = (modifiedContent || '').split('\\n');
 
-            // Parse diff text to determine line types (added/removed/context)
+            // Parse diff text to determine line types (added/removed/context) and build correspondence map
             const originalLineTypes = new Array(originalLines.length).fill('context');
             const modifiedLineTypes = new Array(modifiedLines.length).fill('context');
+            // Maps: original line index -> modified line index (or -1 if no correspondence)
+            const originalToModified = new Map();
+            // Maps: modified line index -> original line index (or -1 if no correspondence)
+            const modifiedToOriginal = new Map();
             
             if (diffText && diffText !== 'Error loading diff') {
               const diffLines = diffText.split('\\n');
@@ -1427,19 +1501,26 @@ export class CommitDialog {
                 }
                 
                 if (line.startsWith('-') && !line.startsWith('---')) {
-                  // Removed line
+                  // Removed line - no corresponding modified line
                   if (oldLineNum >= 0 && oldLineNum < originalLineTypes.length) {
                     originalLineTypes[oldLineNum] = 'removed';
+                    originalToModified.set(oldLineNum, -1); // No correspondence
                   }
                   oldLineNum++;
                 } else if (line.startsWith('+') && !line.startsWith('+++')) {
-                  // Added line
+                  // Added line - no corresponding original line
                   if (newLineNum >= 0 && newLineNum < modifiedLineTypes.length) {
                     modifiedLineTypes[newLineNum] = 'added';
+                    modifiedToOriginal.set(newLineNum, -1); // No correspondence
                   }
                   newLineNum++;
                 } else if (line.startsWith(' ')) {
-                  // Context line (unchanged)
+                  // Context line (unchanged) - both sides correspond
+                  if (oldLineNum >= 0 && oldLineNum < originalLineTypes.length && 
+                      newLineNum >= 0 && newLineNum < modifiedLineTypes.length) {
+                    originalToModified.set(oldLineNum, newLineNum);
+                    modifiedToOriginal.set(newLineNum, oldLineNum);
+                  }
                   oldLineNum++;
                   newLineNum++;
                 }
@@ -1471,6 +1552,7 @@ export class CommitDialog {
             }
 
             // Attach hunk references to the corresponding line ranges
+            // All lines in hunk ranges get hunk info (for tracking), but only changed lines get highlighting
             (hunks || []).forEach(h => {
               const isSelected = h.isSelected;
               const belongsToChangelist = h.belongsToChangelist;
@@ -1554,6 +1636,187 @@ export class CommitDialog {
               }
             }
 
+            // Build aligned rendering arrays with separator markers
+            const originalRenderItems = [];
+            const modifiedRenderItems = [];
+            
+            // Track last corresponding lines to know where to insert separators
+            let lastOriginalWithCorrespondence = -1;
+            let lastModifiedWithCorrespondence = -1;
+            
+            // For original side: include all lines, insert separators for pure additions
+            for (let i = 0; i < sortedOriginalLines.length; i++) {
+              const lineIdx = sortedOriginalLines[i];
+              const lineMeta = originalLineMeta[lineIdx];
+              const correspondingModified = originalToModified.get(lineIdx);
+              
+              // Check for gap separator
+              if (i > 0 && sortedOriginalLines[i] - sortedOriginalLines[i - 1] > 1) {
+                const gapSize = sortedOriginalLines[i] - sortedOriginalLines[i - 1] - 1;
+                originalRenderItems.push({
+                  type: 'separator',
+                  gapSize: gapSize,
+                  prevLineNum: sortedOriginalLines[i - 1] + 1,
+                  nextLineNum: sortedOriginalLines[i] + 1
+                });
+              }
+              
+              // Check if we need to insert separator for pure additions
+              // If this line has correspondence and we've seen pure additions since last correspondence
+              if (correspondingModified !== undefined && correspondingModified !== -1) {
+                lastOriginalWithCorrespondence = originalRenderItems.length;
+              }
+              
+              originalRenderItems.push({ type: 'line', index: lineIdx, meta: lineMeta });
+            }
+            
+            // For modified side: include all lines, insert separators for pure deletions
+            for (let i = 0; i < sortedModifiedLines.length; i++) {
+              const lineIdx = sortedModifiedLines[i];
+              const lineMeta = modifiedLineMeta[lineIdx];
+              const correspondingOriginal = modifiedToOriginal.get(lineIdx);
+              
+              // Check for gap separator
+              if (i > 0 && sortedModifiedLines[i] - sortedModifiedLines[i - 1] > 1) {
+                const gapSize = sortedModifiedLines[i] - sortedModifiedLines[i - 1] - 1;
+                modifiedRenderItems.push({
+                  type: 'separator',
+                  gapSize: gapSize,
+                  prevLineNum: sortedModifiedLines[i - 1] + 1,
+                  nextLineNum: sortedModifiedLines[i] + 1
+                });
+              }
+              
+              // Check if we need to insert separator for pure deletions
+              // If this line has correspondence and we've seen pure deletions since last correspondence
+              if (correspondingOriginal !== undefined && correspondingOriginal !== -1) {
+                lastModifiedWithCorrespondence = modifiedRenderItems.length;
+              }
+              
+              modifiedRenderItems.push({ type: 'line', index: lineIdx, meta: lineMeta });
+            }
+            
+            // Now insert separators for pure additions/deletions
+            // For pure additions: insert separator in original pane for each hunk with pure additions
+            const additionSeparators = []; // Array of {hunkId, position}
+            const processedAdditionHunks = new Set();
+            
+            for (let i = 0; i < sortedModifiedLines.length; i++) {
+              const modIdx = sortedModifiedLines[i];
+              const modMeta = modifiedLineMeta[modIdx];
+              if (modMeta.type === 'added' && modifiedToOriginal.get(modIdx) === -1 && modMeta.hunk) {
+                const hunkId = modMeta.hunk.id;
+                // Only process each hunk once
+                if (!processedAdditionHunks.has(hunkId)) {
+                  processedAdditionHunks.add(hunkId);
+                  
+                  // Check if this is a pure addition (no removed lines) - only then show separator
+                  const hunk = (hunks || []).find(h => h.id === hunkId);
+                  if (hunk) {
+                    // Check if there are any removed lines in this hunk
+                    let hasRemovedLines = false;
+                    if (hunk.oldLines > 0) {
+                      const oldStartIndex = (hunk.oldStart || 1) - 1;
+                      const oldEndIndex = oldStartIndex + (hunk.oldLines || 0);
+                      for (let k = oldStartIndex; k < oldEndIndex && k < originalLineMeta.length; k++) {
+                        if (originalLineMeta[k] && originalLineMeta[k].type === 'removed') {
+                          hasRemovedLines = true;
+                          break;
+                        }
+                      }
+                    }
+                    
+                    // Only show separator if this is a pure addition (no removed lines)
+                    if (!hasRemovedLines) {
+                      // This is a pure addition - find the previous line with correspondence in original
+                      for (let j = i - 1; j >= 0; j--) {
+                        const prevModIdx = sortedModifiedLines[j];
+                        const prevCorr = modifiedToOriginal.get(prevModIdx);
+                        if (prevCorr !== undefined && prevCorr !== -1) {
+                          // Find this line in original render items
+                          const origPos = originalRenderItems.findIndex(item => 
+                            item.type === 'line' && item.index === prevCorr
+                          );
+                          if (origPos >= 0) {
+                            additionSeparators.push({ hunkId: hunkId, position: origPos + 1 });
+                            break;
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            
+            // Insert addition separators in reverse order to maintain indices
+            additionSeparators.sort((a, b) => b.position - a.position);
+            for (const sep of additionSeparators) {
+              originalRenderItems.splice(sep.position, 0, {
+                type: 'addition-separator'
+              });
+            }
+            
+            // For pure deletions: insert separator in modified pane for each hunk with pure deletions
+            const deletionSeparators = []; // Array of {hunkId, position}
+            const processedDeletionHunks = new Set();
+            
+            for (let i = 0; i < sortedOriginalLines.length; i++) {
+              const origIdx = sortedOriginalLines[i];
+              const origMeta = originalLineMeta[origIdx];
+              if (origMeta.type === 'removed' && originalToModified.get(origIdx) === -1 && origMeta.hunk) {
+                const hunkId = origMeta.hunk.id;
+                // Only process each hunk once
+                if (!processedDeletionHunks.has(hunkId)) {
+                  processedDeletionHunks.add(hunkId);
+                  
+                  // Check if this is a pure deletion (no added lines) - only then show separator
+                  const hunk = (hunks || []).find(h => h.id === hunkId);
+                  if (hunk) {
+                    // Check if there are any added lines in this hunk
+                    let hasAddedLines = false;
+                    if (hunk.newLines > 0) {
+                      const newStartIndex = (hunk.newStart || 1) - 1;
+                      const newEndIndex = newStartIndex + (hunk.newLines || 0);
+                      for (let k = newStartIndex; k < newEndIndex && k < modifiedLineMeta.length; k++) {
+                        if (modifiedLineMeta[k] && modifiedLineMeta[k].type === 'added') {
+                          hasAddedLines = true;
+                          break;
+                        }
+                      }
+                    }
+                    
+                    // Only show separator if this is a pure deletion (no added lines)
+                    if (!hasAddedLines) {
+                      // This is a pure deletion - find the previous line with correspondence in modified
+                      for (let j = i - 1; j >= 0; j--) {
+                        const prevOrigIdx = sortedOriginalLines[j];
+                        const prevCorr = originalToModified.get(prevOrigIdx);
+                        if (prevCorr !== undefined && prevCorr !== -1) {
+                          // Find this line in modified render items
+                          const modPos = modifiedRenderItems.findIndex(item => 
+                            item.type === 'line' && item.index === prevCorr
+                          );
+                          if (modPos >= 0) {
+                            deletionSeparators.push({ hunkId: hunkId, position: modPos + 1 });
+                            break;
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            
+            // Insert deletion separators in reverse order to maintain indices
+            deletionSeparators.sort((a, b) => b.position - a.position);
+            for (const sep of deletionSeparators) {
+              modifiedRenderItems.splice(sep.position, 0, {
+                type: 'deletion-separator'
+              });
+            }
+
             // Render side-by-side without hunk headers, with inline checkboxes
             let html = '';
             
@@ -1563,35 +1826,42 @@ export class CommitDialog {
             html += '<div class="diff-side" id="diff-side-original">';
             html += '<div class="diff-side-header">Original</div>';
             
-            for (let idx = 0; idx < sortedOriginalLines.length; idx++) {
-              const i = sortedOriginalLines[idx];
-              const lineMeta = originalLineMeta[i];
-              const hunkInfo = lineMeta.hunk;
-              const hunkClass = hunkInfo
-                ? (hunkInfo.isSelected ? 'hunk-selected' : 'hunk-unselected')
-                : '';
-              
-              // Check if we should show a separator (gap in line numbers)
-              const gapSize = idx > 0 ? (sortedOriginalLines[idx] - sortedOriginalLines[idx - 1] - 1) : 0;
-              const showSeparator = gapSize > 0;
-
-              if (showSeparator) {
-                const prevLineNum = sortedOriginalLines[idx - 1] + 1;
-                const nextLineNum = sortedOriginalLines[idx] + 1;
-                const skippedLines = gapSize;
+            for (const item of originalRenderItems) {
+              if (item.type === 'separator') {
                 html += '<div class="diff-separator">';
                 html += '<div class="diff-separator-line"><span class="diff-separator-line-inner"></span></div>';
-                html += '<div class="diff-separator-text">' + skippedLines + ' line' + (skippedLines !== 1 ? 's' : '') + ' hidden (lines ' + prevLineNum + '–' + (nextLineNum - 1) + ')</div>';
+                html += '<div class="diff-separator-text">' + item.gapSize + ' line' + (item.gapSize !== 1 ? 's' : '') + ' hidden (lines ' + item.prevLineNum + '–' + (item.nextLineNum - 1) + ')</div>';
                 html += '<div class="diff-separator-line"><span class="diff-separator-line-inner"></span></div>';
                 html += '</div>';
-              }
+              } else if (item.type === 'addition-separator') {
+                // Separator for pure additions - use dashed line to distinguish from "lines hidden" markers
+                html += '<div class="diff-separator diff-separator-addition">';
+                html += '<div class="diff-separator-line"><span class="diff-separator-line-inner diff-separator-line-dashed"></span></div>';
+                html += '</div>';
+              } else if (item.type === 'line') {
+                const lineMeta = item.meta;
+                const hunkInfo = lineMeta.hunk;
+                // Only apply hunk highlighting to changed lines (removed), not context lines
+                let hunkClass = '';
+                let otherChangelistClass = '';
+                if (hunkInfo) {
+                  if (!hunkInfo.belongsToChangelist) {
+                    // Lines from other changelists: muted greyish
+                    otherChangelistClass = 'other-changelist';
+                  } else if (lineMeta.type === 'removed') {
+                    // Changed lines (removed): bluish background
+                    hunkClass = hunkInfo.isSelected ? 'hunk-selected' : 'hunk-unselected';
+                  }
+                }
 
-              html += '<div class="diff-line ' + hunkClass + '"' + (hunkInfo ? ' data-hunk-id="' + escapeHtml(hunkInfo.id) + '"' : '') + '>';
-              // Spacer to align with modified side checkboxes
-              html += '<div style="width: 20px; flex-shrink: 0;"></div>';
-              html += '<div class="diff-line-number' + (lineMeta.type === 'removed' ? ' old' : '') + '">' + (lineMeta.num || '') + '</div>';
-              html += '<div class="diff-line-content ' + lineMeta.type + '">' + escapeHtml(lineMeta.content) + '</div>';
-              html += '</div>';
+                // Add data-hunk-id to all lines with hunk info for scroll synchronization
+                html += '<div class="diff-line ' + hunkClass + ' ' + otherChangelistClass + '"' + (hunkInfo ? ' data-hunk-id="' + escapeHtml(hunkInfo.id) + '"' : '') + '>';
+                // Spacer to align with modified side checkboxes
+                html += '<div class="diff-line-checkbox-container"></div>';
+                html += '<div class="diff-line-number' + (lineMeta.type === 'removed' ? ' old' : '') + '">' + (lineMeta.num || '') + '</div>';
+                html += '<div class="diff-line-content ' + lineMeta.type + '">' + escapeHtml(lineMeta.content) + '</div>';
+                html += '</div>';
+              }
             }
             html += '</div>';
             
@@ -1610,46 +1880,101 @@ export class CommitDialog {
             html += '<span>Modified</span>';
             html += '</div>';
 
-            for (let idx = 0; idx < sortedModifiedLines.length; idx++) {
-              const i = sortedModifiedLines[idx];
-              const lineMeta = modifiedLineMeta[i];
-              const hunkInfo = lineMeta.hunk;
-              const hunkClass = hunkInfo
-                ? (hunkInfo.isSelected ? 'hunk-selected' : 'hunk-unselected')
-                : '';
-              
-              // Check if we should show a separator (gap in line numbers)
-              const gapSize = idx > 0 ? (sortedModifiedLines[idx] - sortedModifiedLines[idx - 1] - 1) : 0;
-              const showSeparator = gapSize > 0;
-
-              if (showSeparator) {
-                const prevLineNum = sortedModifiedLines[idx - 1] + 1;
-                const nextLineNum = sortedModifiedLines[idx] + 1;
-                const skippedLines = gapSize;
+            // Track which hunks have shown their checkbox
+            const hunksWithCheckbox = new Set();
+            
+            for (const item of modifiedRenderItems) {
+              if (item.type === 'separator') {
                 html += '<div class="diff-separator">';
                 html += '<div class="diff-separator-line"><span class="diff-separator-line-inner"></span></div>';
-                html += '<div class="diff-separator-text">' + skippedLines + ' line' + (skippedLines !== 1 ? 's' : '') + ' hidden (lines ' + prevLineNum + '–' + (nextLineNum - 1) + ')</div>';
+                html += '<div class="diff-separator-text">' + item.gapSize + ' line' + (item.gapSize !== 1 ? 's' : '') + ' hidden (lines ' + item.prevLineNum + '–' + (item.nextLineNum - 1) + ')</div>';
                 html += '<div class="diff-separator-line"><span class="diff-separator-line-inner"></span></div>';
                 html += '</div>';
-              }
+              } else if (item.type === 'deletion-separator') {
+                // Separator for pure deletions - use dashed line to distinguish from "lines hidden" markers
+                html += '<div class="diff-separator diff-separator-deletion">';
+                html += '<div class="diff-separator-line"><span class="diff-separator-line-inner diff-separator-line-dashed"></span></div>';
+                html += '</div>';
+              } else if (item.type === 'line') {
+                const lineMeta = item.meta;
+                const hunkInfo = lineMeta.hunk;
+                // Determine if this is a changed line (modified) or pure addition
+                // Changed lines appear when both sides have changes in the same hunk
+                let hunkClass = '';
+                let otherChangelistClass = '';
+                if (hunkInfo) {
+                  if (!hunkInfo.belongsToChangelist) {
+                    // Lines from other changelists: muted greyish
+                    otherChangelistClass = 'other-changelist';
+                  } else if (lineMeta.type === 'added') {
+                    // Check if this is a pure addition or a changed line
+                    // Pure additions have no corresponding removed lines in the same hunk
+                    // Changed lines have both removed and added lines in the same hunk
+                    const hunk = (hunks || []).find(h => h.id === hunkInfo.id);
+                    if (hunk) {
+                      // Check if this hunk has removed lines (indicating a change, not pure addition)
+                      // Pure additions have no removed lines in the original side
+                      // Changed lines have removed lines in the original side
+                      let hasRemovedLines = false;
+                      
+                      // Check if this is a pure addition or a change
+                      // Pure additions: oldLines === 0 (no lines removed from original)
+                      // Changed lines: oldLines > 0 (some lines removed from original)
+                      if (hunk.oldLines === 0) {
+                        // Definitely a pure addition - no removed lines
+                        hasRemovedLines = false;
+                      } else {
+                        // oldLines > 0, check if any of those lines are actually removed (not just context)
+                        const oldStartIndex = (hunk.oldStart || 1) - 1;
+                        const oldEndIndex = oldStartIndex + (hunk.oldLines || 0);
+                        for (let k = oldStartIndex; k < oldEndIndex && k < originalLineMeta.length; k++) {
+                          if (originalLineMeta[k] && originalLineMeta[k].type === 'removed') {
+                            // Found a removed line - this is a change, not a pure addition
+                            hasRemovedLines = true;
+                            break;
+                          }
+                        }
+                      }
+                      
+                      if (hasRemovedLines) {
+                        // This hunk has removed lines, so added lines in it are part of a change
+                        // Changed lines (modified): bluish background
+                        hunkClass = hunkInfo.isSelected ? 'hunk-selected' : 'hunk-unselected';
+                      } else {
+                        // Pure additions (hunk has no removed lines): explicitly set to empty string
+                        // This ensures NO hunk-selected or hunk-unselected class is applied
+                        // CSS will then apply the default green background
+                        hunkClass = '';
+                      }
+                    } else {
+                      // No hunk found - treat as pure addition
+                      hunkClass = '';
+                    }
+                  }
+                }
 
-              html += '<div class="diff-line ' + hunkClass + '"' + (hunkInfo ? ' data-hunk-id="' + escapeHtml(hunkInfo.id) + '"' : '') + '>';
-              
-              // Add checkbox inline with first line of hunk (no separate header)
-              if (lineMeta.isFirstInHunk && hunkInfo) {
-                const disabled = !hunkInfo.belongsToChangelist;
-                html += '<input type="checkbox" class="hunk-checkbox" data-file-id="' + fileId + '" data-hunk-id="' + hunkInfo.id + '"' +
-                        (hunkInfo.isSelected ? ' checked' : '') +
-                        (disabled ? ' disabled' : '') +
-                        ' />';
-              } else {
-                // Empty space to align with lines that have checkboxes
-                html += '<div style="width: 20px; flex-shrink: 0;"></div>';
+                // Add data-hunk-id to all lines with hunk info for scroll synchronization
+                // Trim classes to avoid extra spaces and ensure pure additions don't get hunk classes
+                const classes = [hunkClass, otherChangelistClass].filter(c => c && c.trim()).join(' ');
+                html += '<div class="diff-line' + (classes ? ' ' + classes : '') + '"' + (hunkInfo ? ' data-hunk-id="' + escapeHtml(hunkInfo.id) + '"' : '') + '>';
+                
+                // Add checkbox inline with first changed line of hunk (no separate header)
+                // Only show checkbox on first changed line of each hunk
+                html += '<div class="diff-line-checkbox-container">';
+                if (hunkInfo && lineMeta.type === 'added' && !hunksWithCheckbox.has(hunkInfo.id)) {
+                  hunksWithCheckbox.add(hunkInfo.id);
+                  const disabled = !hunkInfo.belongsToChangelist;
+                  html += '<input type="checkbox" class="hunk-checkbox" data-file-id="' + fileId + '" data-hunk-id="' + hunkInfo.id + '"' +
+                          (hunkInfo.isSelected ? ' checked' : '') +
+                          (disabled ? ' disabled' : '') +
+                          ' />';
+                }
+                html += '</div>';
+                
+                html += '<div class="diff-line-number' + (lineMeta.type === 'added' ? ' new' : '') + '">' + (lineMeta.num || '') + '</div>';
+                html += '<div class="diff-line-content ' + lineMeta.type + '">' + escapeHtml(lineMeta.content) + '</div>';
+                html += '</div>';
               }
-              
-              html += '<div class="diff-line-number' + (lineMeta.type === 'added' ? ' new' : '') + '">' + (lineMeta.num || '') + '</div>';
-              html += '<div class="diff-line-content ' + lineMeta.type + '">' + escapeHtml(lineMeta.content) + '</div>';
-              html += '</div>';
             }
             html += '</div>';
             html += '</div>';
@@ -1863,6 +2188,17 @@ export class CommitDialog {
                 }, { passive: true });
               });
             });
+            } catch (error) {
+              console.error('Error rendering diff:', error);
+              const diffContent = document.getElementById('diff-content');
+              const diffHeader = document.getElementById('diff-header-text');
+              if (diffContent) {
+                diffContent.innerHTML = '<div class="diff-empty" style="display: flex; align-items: center; justify-content: center; height: 100%; color: var(--vscode-descriptionForeground); font-size: 13px;">Error rendering diff</div>';
+              }
+              if (diffHeader) {
+                diffHeader.textContent = 'Error';
+              }
+            }
           }
           
           function escapeHtml(text) {
