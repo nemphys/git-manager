@@ -1048,6 +1048,55 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     }),
 
+    // Stage a file (add to index but keep it in the changelist)
+    vscode.commands.registerCommand('git-manager.stageFile', async (arg?: any) => {
+      let fileToStage: FileItem | undefined;
+      const allFiles = treeProvider.getAllFiles();
+
+      if (typeof arg === 'string') {
+        fileToStage = allFiles.find((f) => f.id === arg);
+      } else if (arg && arg.file) {
+        // Invoked from context menu: arg is FileTreeItem
+        fileToStage = arg.file as FileItem;
+      } else if (arg && arg.resourceUri) {
+        const fsPath: string = arg.resourceUri.fsPath as string;
+        // Match by path tail / relative path presence
+        fileToStage = allFiles.find((f) => fsPath.endsWith(f.path));
+      }
+
+      if (!fileToStage) {
+        vscode.window.showWarningMessage('No file selected to stage.');
+        return;
+      }
+
+      // Check if file is already staged
+      if (fileToStage.isStaged) {
+        vscode.window.showInformationMessage(`File "${fileToStage.name}" is already staged.`);
+        return;
+      }
+
+      // Check if file is in a changelist
+      if (!fileToStage.changelistId) {
+        vscode.window.showInformationMessage(`File "${fileToStage.name}" is not in a changelist.`);
+        return;
+      }
+
+      try {
+        const success = await gitService.stageFile(fileToStage.path);
+        if (success) {
+          vscode.window.showInformationMessage(`Staged ${fileToStage.name}`);
+          // Refresh to update the file's staged status
+          treeProvider.refresh();
+          updateAllCommitUI();
+          updateCommitButtonContext();
+        } else {
+          vscode.window.showErrorMessage(`Failed to stage ${fileToStage.name}`);
+        }
+      } catch (error) {
+        vscode.window.showErrorMessage(`Failed to stage file: ${error}`);
+      }
+    }),
+
     // Unstage a file (keep in changelist, just unstage from index)
     vscode.commands.registerCommand('git-manager.unstageFile', async (arg?: any) => {
       let fileToUnstage: FileItem | undefined;

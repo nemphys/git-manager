@@ -47,6 +47,7 @@
     "onCommand:git-manager.revertSelectedFiles",
     "onCommand:git-manager.revertFile",
     "onCommand:git-manager.revertChangelist",
+    "onCommand:git-manager.stageFile",
     "onCommand:git-manager.stashSelectedFiles",
     "onCommand:git-manager.unstageFile",
     "onCommand:git-manager.untrackFile",
@@ -161,6 +162,12 @@
         "title": "Revert Changelist",
         "category": "JetBrains Commit Manager",
         "icon": "$(discard)"
+      },
+      {
+        "command": "git-manager.stageFile",
+        "title": "Stage File",
+        "category": "JetBrains Commit Manager",
+        "icon": "$(add)"
       },
       {
         "command": "git-manager.unstageFile",
@@ -294,6 +301,11 @@
         {
           "command": "git-manager.unstageFile",
           "when": "view == git-manager.changelists && (viewItem == stagedFile || viewItem == stagedFileActive)",
+          "group": "1_modification"
+        },
+        {
+          "command": "git-manager.stageFile",
+          "when": "view == git-manager.changelists && (viewItem == unstagedFile || viewItem == unstagedFileActive)",
           "group": "1_modification"
         },
         {
