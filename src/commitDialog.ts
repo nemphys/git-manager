@@ -881,10 +881,39 @@ export class CommitDialog {
             height: 0;
           }
           
-          /* Optional: Make addition/deletion separators slightly more subtle */
+          /* Visual fill for pure addition/deletion placeholders, similar to stock diff */
           .diff-separator-addition,
           .diff-separator-deletion {
-            padding: 4px 0;
+            padding: 0;
+            background-image: repeating-linear-gradient(
+              135deg,
+              color-mix(in srgb, var(--vscode-editorLineNumber-foreground) 10%, transparent) 0px,
+              color-mix(in srgb, var(--vscode-editorLineNumber-foreground) 10%, transparent) 4px,
+              transparent 4px,
+              transparent 8px
+            );
+            background-color: transparent;
+          }
+          
+          /* Placeholder lines for modifications to equalize hunk heights */
+          .diff-line.diff-placeholder {
+            background-image: repeating-linear-gradient(
+              135deg,
+              color-mix(in srgb, var(--vscode-editorLineNumber-foreground) 10%, transparent) 0px,
+              color-mix(in srgb, var(--vscode-editorLineNumber-foreground) 10%, transparent) 4px,
+              transparent 4px,
+              transparent 8px
+            );
+            background-color: transparent;
+          }
+          
+          .diff-placeholder .diff-line-number {
+            background-color: transparent;
+            border-right: 1px solid var(--vscode-panel-border);
+          }
+          
+          .diff-placeholder .diff-line-content {
+            background-color: transparent;
           }
           
           .diff-separator-text {
@@ -1696,128 +1725,174 @@ export class CommitDialog {
               modifiedRenderItems.push({ type: 'line', index: lineIdx, meta: lineMeta });
             }
             
-            // Now insert separators for pure additions/deletions
-            // For pure additions: insert separator in original pane for each hunk with pure additions
-            const additionSeparators = []; // Array of {hunkId, position}
-            const processedAdditionHunks = new Set();
+            // Add placeholders for all hunk types (additions/deletions/modifications) to equalize hunk heights
+            // Handle multiple non-adjacent change blocks within the same hunk
+            const processedModificationHunks = new Set();
             
-            for (let i = 0; i < sortedModifiedLines.length; i++) {
-              const modIdx = sortedModifiedLines[i];
-              const modMeta = modifiedLineMeta[modIdx];
-              if (modMeta.type === 'added' && modifiedToOriginal.get(modIdx) === -1 && modMeta.hunk) {
-                const hunkId = modMeta.hunk.id;
-                // Only process each hunk once
-                if (!processedAdditionHunks.has(hunkId)) {
-                  processedAdditionHunks.add(hunkId);
-                  
-                  // Check if this is a pure addition (no removed lines) - only then show separator
-                  const hunk = (hunks || []).find(h => h.id === hunkId);
-                  if (hunk) {
-                    // Check if there are any removed lines in this hunk
-                    let hasRemovedLines = false;
-                    if (hunk.oldLines > 0) {
-                      const oldStartIndex = (hunk.oldStart || 1) - 1;
-                      const oldEndIndex = oldStartIndex + (hunk.oldLines || 0);
-                      for (let k = oldStartIndex; k < oldEndIndex && k < originalLineMeta.length; k++) {
-                        if (originalLineMeta[k] && originalLineMeta[k].type === 'removed') {
-                          hasRemovedLines = true;
-                          break;
-                        }
-                      }
-                    }
-                    
-                    // Only show separator if this is a pure addition (no removed lines)
-                    if (!hasRemovedLines) {
-                      // This is a pure addition - find the previous line with correspondence in original
-                      for (let j = i - 1; j >= 0; j--) {
-                        const prevModIdx = sortedModifiedLines[j];
-                        const prevCorr = modifiedToOriginal.get(prevModIdx);
-                        if (prevCorr !== undefined && prevCorr !== -1) {
-                          // Find this line in original render items
-                          const origPos = originalRenderItems.findIndex(item => 
-                            item.type === 'line' && item.index === prevCorr
+            // Helper to find contiguous blocks of changed lines
+            function findChangedLineBlocks(renderItems, hunkId, changeType) {
+              const blocks = [];
+              let currentBlock = null;
+              
+              for (let i = 0; i < renderItems.length; i++) {
+                const item = renderItems[i];
+                if (item.type === 'line' && item.meta && item.meta.hunk && 
+                    item.meta.hunk.id === hunkId && item.meta.type === changeType) {
+                  if (!currentBlock) {
+                    currentBlock = { startIndex: i, endIndex: i, count: 1 };
+                  } else {
+                    currentBlock.endIndex = i;
+                    currentBlock.count++;
+                  }
+                } else {
+                  if (currentBlock) {
+                    blocks.push(currentBlock);
+                    currentBlock = null;
+                  }
+                }
+              }
+              if (currentBlock) {
+                blocks.push(currentBlock);
+              }
+              
+              return blocks;
+            }
+            
+            // Process each hunk to find modification blocks
+            const allHunkIds = new Set();
+            originalRenderItems.forEach(item => {
+              if (item.type === 'line' && item.meta && item.meta.hunk) {
+                allHunkIds.add(item.meta.hunk.id);
+              }
+            });
+            modifiedRenderItems.forEach(item => {
+              if (item.type === 'line' && item.meta && item.meta.hunk) {
+                allHunkIds.add(item.meta.hunk.id);
+              }
+            });
+            
+            allHunkIds.forEach(hunkId => {
+              // Find blocks of removed lines in original and added lines in modified
+              const removedBlocks = findChangedLineBlocks(originalRenderItems, hunkId, 'removed');
+              const addedBlocks = findChangedLineBlocks(modifiedRenderItems, hunkId, 'added');
+              
+              const lineHeight = 20; // Approximate line height in pixels
+              
+              // Handle pure additions: no removed lines, only added lines
+              if (removedBlocks.length === 0 && addedBlocks.length > 0) {
+                // Find insertion point: after the last line before the first added block in modified
+                let insertPos = -1;
+                for (let i = 0; i < modifiedRenderItems.length; i++) {
+                  const item = modifiedRenderItems[i];
+                  if (item.type === 'line' && item.meta && item.meta.hunk && 
+                      item.meta.hunk.id === hunkId && item.meta.type === 'added') {
+                    // Find the previous line with correspondence in original
+                    for (let j = i - 1; j >= 0; j--) {
+                      const prevItem = modifiedRenderItems[j];
+                      if (prevItem.type === 'line' && prevItem.meta) {
+                        const prevOrigIdx = modifiedToOriginal.get(prevItem.index);
+                        if (prevOrigIdx !== undefined && prevOrigIdx !== -1) {
+                          const origPos = originalRenderItems.findIndex(origItem => 
+                            origItem.type === 'line' && origItem.index === prevOrigIdx
                           );
                           if (origPos >= 0) {
-                            additionSeparators.push({ hunkId: hunkId, position: origPos + 1 });
+                            insertPos = origPos + 1;
                             break;
                           }
                         }
                       }
                     }
+                    break;
                   }
                 }
+                
+                if (insertPos >= 0) {
+                  const totalAddedHeight = addedBlocks.reduce((sum, block) => sum + block.count * lineHeight, 0);
+                  originalRenderItems.splice(insertPos, 0, {
+                    type: 'modification-placeholder',
+                    hunkId: hunkId,
+                    height: totalAddedHeight
+                  });
+                }
+                return;
               }
-            }
-            
-            // Insert addition separators in reverse order to maintain indices
-            additionSeparators.sort((a, b) => b.position - a.position);
-            for (const sep of additionSeparators) {
-              originalRenderItems.splice(sep.position, 0, {
-                type: 'addition-separator',
-                hunkId: sep.hunkId
-              });
-            }
-            
-            // For pure deletions: insert separator in modified pane for each hunk with pure deletions
-            const deletionSeparators = []; // Array of {hunkId, position}
-            const processedDeletionHunks = new Set();
-            
-            for (let i = 0; i < sortedOriginalLines.length; i++) {
-              const origIdx = sortedOriginalLines[i];
-              const origMeta = originalLineMeta[origIdx];
-              if (origMeta.type === 'removed' && originalToModified.get(origIdx) === -1 && origMeta.hunk) {
-                const hunkId = origMeta.hunk.id;
-                // Only process each hunk once
-                if (!processedDeletionHunks.has(hunkId)) {
-                  processedDeletionHunks.add(hunkId);
-                  
-                  // Check if this is a pure deletion (no added lines) - only then show separator
-                  const hunk = (hunks || []).find(h => h.id === hunkId);
-                  if (hunk) {
-                    // Check if there are any added lines in this hunk
-                    let hasAddedLines = false;
-                    if (hunk.newLines > 0) {
-                      const newStartIndex = (hunk.newStart || 1) - 1;
-                      const newEndIndex = newStartIndex + (hunk.newLines || 0);
-                      for (let k = newStartIndex; k < newEndIndex && k < modifiedLineMeta.length; k++) {
-                        if (modifiedLineMeta[k] && modifiedLineMeta[k].type === 'added') {
-                          hasAddedLines = true;
-                          break;
-                        }
-                      }
-                    }
-                    
-                    // Only show separator if this is a pure deletion (no added lines)
-                    if (!hasAddedLines) {
-                      // This is a pure deletion - find the previous line with correspondence in modified
-                      for (let j = i - 1; j >= 0; j--) {
-                        const prevOrigIdx = sortedOriginalLines[j];
-                        const prevCorr = originalToModified.get(prevOrigIdx);
-                        if (prevCorr !== undefined && prevCorr !== -1) {
-                          // Find this line in modified render items
-                          const modPos = modifiedRenderItems.findIndex(item => 
-                            item.type === 'line' && item.index === prevCorr
+              
+              // Handle pure deletions: removed lines, no added lines
+              if (removedBlocks.length > 0 && addedBlocks.length === 0) {
+                // Find insertion point: after the last line before the first removed block in original
+                let insertPos = -1;
+                for (let i = 0; i < originalRenderItems.length; i++) {
+                  const item = originalRenderItems[i];
+                  if (item.type === 'line' && item.meta && item.meta.hunk && 
+                      item.meta.hunk.id === hunkId && item.meta.type === 'removed') {
+                    // Find the previous line with correspondence in modified
+                    for (let j = i - 1; j >= 0; j--) {
+                      const prevItem = originalRenderItems[j];
+                      if (prevItem.type === 'line' && prevItem.meta) {
+                        const prevModIdx = originalToModified.get(prevItem.index);
+                        if (prevModIdx !== undefined && prevModIdx !== -1) {
+                          const modPos = modifiedRenderItems.findIndex(modItem => 
+                            modItem.type === 'line' && modItem.index === prevModIdx
                           );
                           if (modPos >= 0) {
-                            deletionSeparators.push({ hunkId: hunkId, position: modPos + 1 });
+                            insertPos = modPos + 1;
                             break;
                           }
                         }
                       }
                     }
+                    break;
+                  }
+                }
+                
+                if (insertPos >= 0) {
+                  const totalRemovedHeight = removedBlocks.reduce((sum, block) => sum + block.count * lineHeight, 0);
+                  modifiedRenderItems.splice(insertPos, 0, {
+                    type: 'modification-placeholder',
+                    hunkId: hunkId,
+                    height: totalRemovedHeight
+                  });
+                }
+                return;
+              }
+              
+              // Handle modifications: both sides have changes
+              if (removedBlocks.length > 0 && addedBlocks.length > 0) {
+                // Match blocks by order (first removed block matches first added block, etc.)
+                const maxBlocks = Math.max(removedBlocks.length, addedBlocks.length);
+                
+                // Insert placeholders after each block pair where heights differ
+                // Process in reverse order to maintain indices
+                for (let blockIdx = maxBlocks - 1; blockIdx >= 0; blockIdx--) {
+                  const removedBlock = removedBlocks[blockIdx] || null;
+                  const addedBlock = addedBlocks[blockIdx] || null;
+                  
+                  if (!removedBlock && !addedBlock) continue;
+                  
+                  const removedCount = removedBlock ? removedBlock.count : 0;
+                  const addedCount = addedBlock ? addedBlock.count : 0;
+                  const heightDiff = (addedCount - removedCount) * lineHeight;
+                  
+                  if (Math.abs(heightDiff) > 1) {
+                    if (heightDiff > 0 && removedBlock) {
+                      // Modified side is taller - add placeholder to original after this removed block
+                      originalRenderItems.splice(removedBlock.endIndex + 1, 0, {
+                        type: 'modification-placeholder',
+                        hunkId: hunkId,
+                        height: heightDiff
+                      });
+                    } else if (heightDiff < 0 && addedBlock) {
+                      // Original side is taller - add placeholder to modified after this added block
+                      modifiedRenderItems.splice(addedBlock.endIndex + 1, 0, {
+                        type: 'modification-placeholder',
+                        hunkId: hunkId,
+                        height: -heightDiff
+                      });
+                    }
                   }
                 }
               }
-            }
-            
-            // Insert deletion separators in reverse order to maintain indices
-            deletionSeparators.sort((a, b) => b.position - a.position);
-            for (const sep of deletionSeparators) {
-              modifiedRenderItems.splice(sep.position, 0, {
-                type: 'deletion-separator',
-                hunkId: sep.hunkId
-              });
-            }
+            });
 
             // Render side-by-side without hunk headers, with inline checkboxes
             let html = '';
@@ -1835,12 +1910,13 @@ export class CommitDialog {
                 html += '<div class="diff-separator-text">' + item.gapSize + ' line' + (item.gapSize !== 1 ? 's' : '') + ' hidden (lines ' + item.prevLineNum + '–' + (item.nextLineNum - 1) + ')</div>';
                 html += '<div class="diff-separator-line"><span class="diff-separator-line-inner"></span></div>';
                 html += '</div>';
-              } else if (item.type === 'addition-separator') {
-                // Separator for pure additions - use dashed line to distinguish from "lines hidden" markers
-                // Add data-hunk-id for scroll synchronization
-                const separatorHunkId = item.hunkId ? escapeHtml(item.hunkId) : '';
-                html += '<div class="diff-separator diff-separator-addition"' + (separatorHunkId ? ' data-hunk-id="' + separatorHunkId + '" data-separator-type="addition"' : '') + '>';
-                html += '<div class="diff-separator-line"><span class="diff-separator-line-inner diff-separator-line-dashed"></span></div>';
+              } else if (item.type === 'modification-placeholder') {
+                // Placeholder for modifications to equalize hunk heights
+                const placeholderHunkId = item.hunkId ? escapeHtml(item.hunkId) : '';
+                html += '<div class="diff-line diff-placeholder diff-placeholder-original"' + (placeholderHunkId ? ' data-hunk-id="' + placeholderHunkId + '"' : '') + ' style="height: ' + item.height + 'px; min-height: ' + item.height + 'px;">';
+                html += '<div class="diff-line-checkbox-container"></div>';
+                html += '<div class="diff-line-number old"></div>';
+                html += '<div class="diff-line-content placeholder"></div>';
                 html += '</div>';
               } else if (item.type === 'line') {
                 const lineMeta = item.meta;
@@ -1894,12 +1970,13 @@ export class CommitDialog {
                 html += '<div class="diff-separator-text">' + item.gapSize + ' line' + (item.gapSize !== 1 ? 's' : '') + ' hidden (lines ' + item.prevLineNum + '–' + (item.nextLineNum - 1) + ')</div>';
                 html += '<div class="diff-separator-line"><span class="diff-separator-line-inner"></span></div>';
                 html += '</div>';
-              } else if (item.type === 'deletion-separator') {
-                // Separator for pure deletions - use dashed line to distinguish from "lines hidden" markers
-                // Add data-hunk-id for scroll synchronization
-                const separatorHunkId = item.hunkId ? escapeHtml(item.hunkId) : '';
-                html += '<div class="diff-separator diff-separator-deletion"' + (separatorHunkId ? ' data-hunk-id="' + separatorHunkId + '" data-separator-type="deletion"' : '') + '>';
-                html += '<div class="diff-separator-line"><span class="diff-separator-line-inner diff-separator-line-dashed"></span></div>';
+              } else if (item.type === 'modification-placeholder') {
+                // Placeholder for modifications to equalize hunk heights
+                const placeholderHunkId = item.hunkId ? escapeHtml(item.hunkId) : '';
+                html += '<div class="diff-line diff-placeholder diff-placeholder-modified"' + (placeholderHunkId ? ' data-hunk-id="' + placeholderHunkId + '"' : '') + ' style="height: ' + item.height + 'px; min-height: ' + item.height + 'px;">';
+                html += '<div class="diff-line-checkbox-container"></div>';
+                html += '<div class="diff-line-number"></div>';
+                html += '<div class="diff-line-content placeholder"></div>';
                 html += '</div>';
               } else if (item.type === 'line') {
                 const lineMeta = item.meta;
@@ -1986,6 +2063,7 @@ export class CommitDialog {
             html += '</div>';
             
             diffContent.innerHTML = html;
+
             
             // Set indeterminate state for the "all hunks" checkbox on the active file
             const allHunksCheckbox = diffContent.querySelector('.all-hunks-checkbox');
@@ -2045,362 +2123,59 @@ export class CommitDialog {
               });
             });
 
-            // Synced scrolling between original and modified panes based on visible hunks
-            // Use requestAnimationFrame to ensure DOM is fully rendered and layout is complete
-            requestAnimationFrame(() => {
-              requestAnimationFrame(() => {
-                const originalSide = document.getElementById('diff-side-original');
-                const modifiedSide = document.getElementById('diff-side-modified');
-                
-                if (!originalSide || !modifiedSide) return;
-                
-                let syncingFromOriginal = false;
-                let syncingFromModified = false;
+            // Simple absolute scroll synchronization between original and modified panes.
+            // Because we have stretched pure-addition/deletion separators to match the
+            // height of their corresponding hunks on the other side, the total content
+            // heights of both panes should now be effectively equal, so we can just
+            // mirror scrollTop.
+            requestAnimationFrame(function () {
+              requestAnimationFrame(function () {
+                var originalSide = document.getElementById('diff-side-original');
+                var modifiedSide = document.getElementById('diff-side-modified');
 
-                // Find the hunk that is most visible and get its relative position in viewport
-                function findVisibleHunkWithPosition(container) {
-                  const scrollTop = container.scrollTop;
-                  const viewportHeight = container.clientHeight;
-                  const viewportTop = scrollTop;
-                  const viewportBottom = scrollTop + viewportHeight;
-                  const viewportCenter = scrollTop + viewportHeight / 2;
-                  
-                  // Get all lines with hunk IDs, grouped by hunk (including separators)
-                  const hunkGroups = new Map();
-                  const lines = container.querySelectorAll('.diff-line[data-hunk-id]');
-                  const separators = container.querySelectorAll('.diff-separator[data-hunk-id]');
-                  
-                  for (const line of lines) {
-                    const hunkId = line.getAttribute('data-hunk-id');
-                    if (!hunkId) continue;
-                    
-                    if (!hunkGroups.has(hunkId)) {
-                      hunkGroups.set(hunkId, { lines: [], separators: [] });
-                    }
-                    hunkGroups.get(hunkId).lines.push(line);
-                  }
-                  
-                  // Also group separators by hunk
-                  for (const separator of separators) {
-                    const hunkId = separator.getAttribute('data-hunk-id');
-                    if (!hunkId) continue;
-                    
-                    if (!hunkGroups.has(hunkId)) {
-                      hunkGroups.set(hunkId, { lines: [], separators: [] });
-                    }
-                    hunkGroups.get(hunkId).separators.push(separator);
-                  }
-                  
-                  let bestHunk = null;
-                  let bestScore = -1;
-                  let bestHunkTop = 0;
-                  let bestHunkBottom = 0;
-                  
-                  // For each hunk, calculate how much of it is visible
-                  for (const [hunkId, hunkData] of hunkGroups.entries()) {
-                    if (hunkData.lines.length === 0 && hunkData.separators.length === 0) continue;
-                    
-                    // Find the top and bottom of this hunk group (including separators)
-                    let hunkTop = Infinity;
-                    let hunkBottom = -Infinity;
-                    
-                    for (const line of hunkData.lines) {
-                      const lineOffset = line.offsetTop;
-                      const lineHeight = line.offsetHeight;
-                      hunkTop = Math.min(hunkTop, lineOffset);
-                      hunkBottom = Math.max(hunkBottom, lineOffset + lineHeight);
-                    }
-                    
-                    for (const separator of hunkData.separators) {
-                      const sepOffset = separator.offsetTop;
-                      const sepHeight = separator.offsetHeight;
-                      hunkTop = Math.min(hunkTop, sepOffset);
-                      hunkBottom = Math.max(hunkBottom, sepOffset + sepHeight);
-                    }
-                    
-                    // Calculate how much of this hunk is visible
-                    const visibleTop = Math.max(viewportTop, hunkTop);
-                    const visibleBottom = Math.min(viewportBottom, hunkBottom);
-                    const visibleHeight = Math.max(0, visibleBottom - visibleTop);
-                    const hunkHeight = hunkBottom - hunkTop;
-                    const visibilityRatio = hunkHeight > 0 ? visibleHeight / hunkHeight : 0;
-                    
-                    // Also consider distance from viewport center
-                    const hunkCenter = (hunkTop + hunkBottom) / 2;
-                    const distanceFromCenter = Math.abs(hunkCenter - viewportCenter);
-                    const maxDistance = viewportHeight;
-                    const distanceScore = 1 - Math.min(1, distanceFromCenter / maxDistance);
-                    
-                    // Combined score: visibility ratio + distance score
-                    const score = visibilityRatio * 0.7 + distanceScore * 0.3;
-                    
-                    if (score > bestScore) {
-                      bestScore = score;
-                      bestHunk = hunkId;
-                      bestHunkTop = hunkTop;
-                      bestHunkBottom = hunkBottom;
-                    }
-                  }
-                  
-                  if (!bestHunk) return null;
-                  
-                  // Calculate relative position: where is the hunk top relative to viewport top (0-1)
-                  const relativePosition = (bestHunkTop - viewportTop) / viewportHeight;
-                  
-                  return {
-                    hunkId: bestHunk,
-                    relativePosition: relativePosition,
-                    hunkTop: bestHunkTop,
-                    hunkBottom: bestHunkBottom,
-                    hunkHeight: bestHunkBottom - bestHunkTop
-                  };
+                if (!originalSide || !modifiedSide) {
+                  return;
                 }
 
-                // Unified paused scrolling state for all hunk types (separators and shorter hunks)
-                let anchorPaused = false;
-                let anchorInfo = null; // { hunkId, anchorContainer, anchorTop, anchorScrollTop, contentContainer, contentTop, contentBottom }
-                
-                // Unified function to check and apply sticky anchor logic
-                function checkStickyAnchor(hunkId, container1, container2, hunkInfo1, hunkInfo2, isScrollingFromContainer1) {
-                  if (!hunkId) return null;
-                  
-                  const viewportHeight1 = container1.clientHeight;
-                  const viewportHeight2 = container2.clientHeight;
-                  
-                  // Find all elements of this hunk in both containers
-                  const lines1 = container1.querySelectorAll('.diff-line[data-hunk-id="' + hunkId + '"]');
-                  const separators1 = container1.querySelectorAll('.diff-separator[data-hunk-id="' + hunkId + '"]');
-                  const lines2 = container2.querySelectorAll('.diff-line[data-hunk-id="' + hunkId + '"]');
-                  const separators2 = container2.querySelectorAll('.diff-separator[data-hunk-id="' + hunkId + '"]');
-                  
-                  // Calculate bounds for both sides
-                  let top1 = Infinity, bottom1 = -Infinity;
-                  let top2 = Infinity, bottom2 = -Infinity;
-                  
-                  for (const line of lines1) {
-                    top1 = Math.min(top1, line.offsetTop);
-                    bottom1 = Math.max(bottom1, line.offsetTop + line.offsetHeight);
-                  }
-                  for (const sep of separators1) {
-                    top1 = Math.min(top1, sep.offsetTop);
-                    bottom1 = Math.max(bottom1, sep.offsetTop + sep.offsetHeight);
-                  }
-                  
-                  for (const line of lines2) {
-                    top2 = Math.min(top2, line.offsetTop);
-                    bottom2 = Math.max(bottom2, line.offsetTop + line.offsetHeight);
-                  }
-                  for (const sep of separators2) {
-                    top2 = Math.min(top2, sep.offsetTop);
-                    bottom2 = Math.max(bottom2, sep.offsetTop + sep.offsetHeight);
-                  }
-                  
-                  const height1 = bottom1 - top1;
-                  const height2 = bottom2 - top2;
-                  
-                  // Determine which side is the anchor (shorter or has separator)
-                  // For pure additions: original has separator (anchor), modified has content
-                  // For pure deletions: modified has separator (anchor), original has content
-                  // For different heights: shorter side is anchor
-                  
-                  let anchorContainer = null;
-                  let anchorTop = null;
-                  let contentContainer = null;
-                  let contentTop = null;
-                  let contentBottom = null;
-                  let anchorViewportHeight = null;
-                  
-                  // Check for addition separator (in container1/original)
-                  const additionSep1 = container1.querySelector('.diff-separator[data-hunk-id="' + hunkId + '"][data-separator-type="addition"]');
-                  if (additionSep1 && !isScrollingFromContainer1) {
-                    anchorContainer = container1;
-                    anchorTop = additionSep1.offsetTop;
-                    anchorViewportHeight = viewportHeight1;
-                    contentContainer = container2;
-                    // Find added lines in container2
-                    const addedLines = Array.from(lines2).filter(line => line.querySelector('.diff-line-content.added') !== null);
-                    if (addedLines.length > 0) {
-                      contentTop = Math.min(...Array.from(addedLines).map(line => line.offsetTop));
-                      const lastLine = addedLines[addedLines.length - 1];
-                      contentBottom = lastLine.offsetTop + lastLine.offsetHeight;
-                    }
-                  }
-                  
-                  // Check for deletion separator (in container2/modified)
-                  const deletionSep2 = container2.querySelector('.diff-separator[data-hunk-id="' + hunkId + '"][data-separator-type="deletion"]');
-                  if (deletionSep2 && isScrollingFromContainer1) {
-                    anchorContainer = container2;
-                    anchorTop = deletionSep2.offsetTop;
-                    anchorViewportHeight = viewportHeight2;
-                    contentContainer = container1;
-                    // Find deleted lines in container1
-                    const deletedLines = Array.from(lines1).filter(line => line.querySelector('.diff-line-content.removed') !== null);
-                    if (deletedLines.length > 0) {
-                      contentTop = Math.min(...Array.from(deletedLines).map(line => line.offsetTop));
-                      const lastLine = deletedLines[deletedLines.length - 1];
-                      contentBottom = lastLine.offsetTop + lastLine.offsetHeight;
-                    }
-                  }
-                  
-                  // Check for different heights (no separators)
-                  if (!anchorContainer && Math.abs(height1 - height2) > 5) {
-                    if (height1 < height2) {
-                      anchorContainer = container1;
-                      anchorTop = top1;
-                      anchorViewportHeight = viewportHeight1;
-                      contentContainer = container2;
-                      contentTop = top2;
-                      contentBottom = bottom2;
-                    } else {
-                      anchorContainer = container2;
-                      anchorTop = top2;
-                      anchorViewportHeight = viewportHeight2;
-                      contentContainer = container1;
-                      contentTop = top1;
-                      contentBottom = bottom1;
-                    }
-                  }
-                  
-                  if (!anchorContainer || !contentContainer || contentTop === null || contentBottom === null) {
-                    return null;
-                  }
-                  
-                  // Check if anchor is at center
-                  const anchorScrollTop = anchorContainer.scrollTop;
-                  const anchorRelativeToViewport = anchorTop - anchorScrollTop;
-                  const viewportCenter = anchorViewportHeight / 2;
-                  const isAtCenter = anchorRelativeToViewport >= viewportCenter - 10 && anchorRelativeToViewport <= viewportCenter + 10;
-                  
-                  if (isAtCenter) {
-                    // Anchor is centered - check if we should pause
-                    if (!anchorPaused || !anchorInfo || anchorInfo.hunkId !== hunkId) {
-                      anchorPaused = true;
-                      anchorInfo = {
-                        hunkId: hunkId,
-                        anchorContainer: anchorContainer,
-                        anchorTop: anchorTop,
-                        anchorScrollTop: anchorScrollTop,
-                        contentContainer: contentContainer,
-                        contentTop: contentTop,
-                        contentBottom: contentBottom
-                      };
-                      anchorContainer.dataset.pausedScrollTop = anchorScrollTop.toString();
-                    }
-                    
-                    // Check if end of content has reached anchor position
-                    const contentScrollTop = contentContainer.scrollTop;
-                    const contentTopRelativeToViewport = contentTop - contentScrollTop;
-                    const contentHeight = contentBottom - contentTop;
-                    const endOfContentRelativeToViewport = contentTopRelativeToViewport + contentHeight;
-                    const anchorRelativePos = anchorInfo.anchorTop - anchorInfo.anchorScrollTop;
-                    
-                    if (endOfContentRelativeToViewport >= anchorRelativePos) {
-                      // End reached - resume scrolling
-                      anchorPaused = false;
-                      anchorInfo = null;
-                      if (anchorContainer.dataset.pausedScrollTop) {
-                        delete anchorContainer.dataset.pausedScrollTop;
-                      }
-                      return false; // Don't pause
-                    } else {
-                      // Keep anchor paused
-                      return true; // Should pause
-                    }
-                  } else {
-                    // Anchor not at center - clear pause state
-                    if (anchorPaused && anchorInfo && anchorInfo.hunkId === hunkId) {
-                      anchorPaused = false;
-                      anchorInfo = null;
-                      if (anchorContainer.dataset.pausedScrollTop) {
-                        delete anchorContainer.dataset.pausedScrollTop;
-                      }
-                    }
-                    return false; // Don't pause
-                  }
-                }
-                
-                // Scroll target pane to show the same hunk at the same relative position
-                function scrollTargetToMatchSource(targetContainer, sourceContainer, hunkInfo, isScrollingFromOriginal) {
-                  if (!hunkInfo || !hunkInfo.hunkId) return;
-                  
-                  const viewportHeight = targetContainer.clientHeight;
-                  
-                  // Check for sticky anchor (unified for all hunk types)
-                  const shouldPause = checkStickyAnchor(
-                    hunkInfo.hunkId,
-                    isScrollingFromOriginal ? originalSide : modifiedSide,
-                    isScrollingFromOriginal ? modifiedSide : originalSide,
-                    hunkInfo,
-                    hunkInfo,
-                    isScrollingFromOriginal
-                  );
-                  
-                  if (shouldPause && anchorInfo && anchorInfo.anchorContainer === targetContainer) {
-                    // Target is the anchor and should be paused - don't scroll it
+                var syncingFromOriginal = false;
+                var syncingFromModified = false;
+                var programmaticScrollContainer = null;
+
+                originalSide.addEventListener('scroll', function () {
+                  if (programmaticScrollContainer === originalSide) {
                     return;
                   }
-                  
-                  // Find all lines of this hunk in target (including separators)
-                  const targetHunkLines = targetContainer.querySelectorAll('.diff-line[data-hunk-id="' + hunkInfo.hunkId + '"]');
-                  const targetHunkSeparators = targetContainer.querySelectorAll('.diff-separator[data-hunk-id="' + hunkInfo.hunkId + '"]');
-                  
-                  if (targetHunkLines.length === 0 && targetHunkSeparators.length === 0) return;
-                  
-                  // Calculate target hunk bounds
-                  let targetHunkTop = Infinity;
-                  let targetHunkBottom = -Infinity;
-                  
-                  for (const line of targetHunkLines) {
-                    targetHunkTop = Math.min(targetHunkTop, line.offsetTop);
-                    targetHunkBottom = Math.max(targetHunkBottom, line.offsetTop + line.offsetHeight);
+                  if (syncingFromModified) {
+                    return;
                   }
-                  
-                  for (const separator of targetHunkSeparators) {
-                    targetHunkTop = Math.min(targetHunkTop, separator.offsetTop);
-                    targetHunkBottom = Math.max(targetHunkBottom, separator.offsetTop + separator.offsetHeight);
-                  }
-                  
-                  // Normal scrolling synchronization (when not paused)
-                  // Use relative position matching for smooth scrolling
-                  const targetScroll = targetHunkTop - (hunkInfo.relativePosition * viewportHeight);
-                  targetContainer.scrollTop = Math.max(0, targetScroll);
-                }
 
-                originalSide.addEventListener('scroll', () => {
-                  // Only sync if not already syncing from modified side
-                  if (syncingFromModified) return;
-                  
                   syncingFromOriginal = true;
-                  
-                  requestAnimationFrame(() => {
-                    const hunkInfo = findVisibleHunkWithPosition(originalSide);
-                    if (hunkInfo) {
-                      scrollTargetToMatchSource(modifiedSide, originalSide, hunkInfo, true);
-                      // If original is paused (anchor), restore its scroll position
-                      if (anchorPaused && anchorInfo && anchorInfo.anchorContainer === originalSide && originalSide.dataset.pausedScrollTop) {
-                        originalSide.scrollTop = parseFloat(originalSide.dataset.pausedScrollTop);
-                      }
-                    }
-                    syncingFromOriginal = false;
+                  requestAnimationFrame(function () {
+                    programmaticScrollContainer = modifiedSide;
+                    modifiedSide.scrollTop = originalSide.scrollTop;
+                    requestAnimationFrame(function () {
+                      programmaticScrollContainer = null;
+                      syncingFromOriginal = false;
+                    });
                   });
                 }, { passive: true });
 
-                modifiedSide.addEventListener('scroll', () => {
-                  // Only sync if not already syncing from original side
-                  if (syncingFromOriginal) return;
-                  
+                modifiedSide.addEventListener('scroll', function () {
+                  if (programmaticScrollContainer === modifiedSide) {
+                    return;
+                  }
+                  if (syncingFromOriginal) {
+                    return;
+                  }
+
                   syncingFromModified = true;
-                  
-                  requestAnimationFrame(() => {
-                    const hunkInfo = findVisibleHunkWithPosition(modifiedSide);
-                    if (hunkInfo) {
-                      scrollTargetToMatchSource(originalSide, modifiedSide, hunkInfo, false);
-                      // If modified is paused (anchor), restore its scroll position
-                      if (anchorPaused && anchorInfo && anchorInfo.anchorContainer === modifiedSide && modifiedSide.dataset.pausedScrollTop) {
-                        modifiedSide.scrollTop = parseFloat(modifiedSide.dataset.pausedScrollTop);
-                      }
-                    }
-                    syncingFromModified = false;
+                  requestAnimationFrame(function () {
+                    programmaticScrollContainer = originalSide;
+                    originalSide.scrollTop = modifiedSide.scrollTop;
+                    requestAnimationFrame(function () {
+                      programmaticScrollContainer = null;
+                      syncingFromModified = false;
+                    });
                   });
                 }, { passive: true });
               });
