@@ -362,28 +362,17 @@ export async function activate(context: vscode.ExtensionContext) {
             });
           }
 
-          // If changelistId is provided, create a filtered version with only hunks from that changelist
-          if (changelistId && treeProvider && workspaceRoot) {
-            try {
-              const filteredFile = await createFilteredFileVersion(relativePath, changelistId, workspaceRoot, gitService, treeProvider);
-              if (filteredFile) {
-                right = vscode.Uri.file(filteredFile);
-                const changelist = treeProvider.getChangelists().find(c => c.id === changelistId);
-                const changelistName = changelist ? changelist.name : 'Changelist';
-                title = `${fileName} (HEAD ↔︎ ${changelistName})`;
-                // Store temp file for cleanup (reuse tempEmptyFile variable)
-                tempEmptyFile = filteredFile;
-              } else {
-                right = uri; // fallback to full working tree
-                title = `${fileName} (HEAD ↔︎ Working Tree)`;
-              }
-            } catch (error) {
-              console.error('Error creating filtered file version:', error);
-              right = uri; // fallback to full working tree
-              title = `${fileName} (HEAD ↔︎ Working Tree)`;
-            }
+          // Always use the actual working file as the right side so edits persist.
+          // Even when viewing a changelist, we show the full working tree version
+          // so that edits are saved to the real file, not a temporary file.
+          right = uri; // working tree
+          
+          // Update title to indicate changelist context if provided
+          if (changelistId && treeProvider) {
+            const changelist = treeProvider.getChangelists().find(c => c.id === changelistId);
+            const changelistName = changelist ? changelist.name : 'Changelist';
+            title = `${fileName} (HEAD ↔︎ ${changelistName})`;
           } else {
-            right = uri; // working tree
             title = `${fileName} (HEAD ↔︎ Working Tree)`;
           }
         }
