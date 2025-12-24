@@ -20,6 +20,11 @@ let isExpanded: boolean = false; // Track expand/collapse state
 let commitUI: CommitUI;
 let hunkDecorationProvider: HunkDecorationProvider;
 
+// Double-click detection for tree view
+let lastOpenDiffUri: vscode.Uri | null = null;
+let lastOpenDiffTime: number = 0;
+const DOUBLE_CLICK_THRESHOLD = 300; // milliseconds
+
 // Helper function to create a filtered file version with only hunks from a specific changelist
 async function createFilteredFileVersion(
   filePath: string,
@@ -242,6 +247,24 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // Open a diff for a file from the tree
     vscode.commands.registerCommand('git-manager.openDiff', async (uri: vscode.Uri, fileStatus?: FileStatus, changelistId?: string) => {
+      // Check for double-click: if same URI opened within threshold, open file instead
+      const now = Date.now();
+      const isDoubleClick = lastOpenDiffUri && 
+                           lastOpenDiffUri.fsPath === uri.fsPath && 
+                           (now - lastOpenDiffTime) < DOUBLE_CLICK_THRESHOLD;
+      
+      if (isDoubleClick) {
+        // Double-click detected - open file normally instead of diff
+        lastOpenDiffUri = null;
+        lastOpenDiffTime = 0;
+        await vscode.commands.executeCommand('vscode.open', uri);
+        return;
+      }
+      
+      // Track this diff open for double-click detection
+      lastOpenDiffUri = uri;
+      lastOpenDiffTime = now;
+      
       let tempEmptyFile: string | undefined;
       let tempHeadFile: string | undefined;
       try {
