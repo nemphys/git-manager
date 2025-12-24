@@ -27,7 +27,7 @@ export class WebviewCommitManager {
   }
 
   async show(): Promise<void> {
-    this.panel = vscode.window.createWebviewPanel('commitManager', 'JetBrains Commit Manager', vscode.ViewColumn.One, {
+    this.panel = vscode.window.createWebviewPanel('commitManager', 'Commit Manager', vscode.ViewColumn.One, {
       enableScripts: true,
       retainContextWhenHidden: true,
     });
@@ -266,7 +266,7 @@ export class WebviewCommitManager {
       <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>JetBrains Commit Manager</title>
+        <title>Commit Manager</title>
         <style>
           body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -494,7 +494,7 @@ export class WebviewCommitManager {
       </head>
       <body>
         <div class="header">
-          <h1>JetBrains Commit Manager</h1>
+          <h1>Commit Manager</h1>
           <div class="actions">
             <button class="btn btn-secondary" onclick="refresh()">Refresh</button>
             <button class="btn btn-secondary" onclick="createChangelist()">Create Changelist</button>

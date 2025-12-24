@@ -1329,7 +1329,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // Test command to verify extension is working
     vscode.commands.registerCommand('git-manager.test', () => {
-      vscode.window.showInformationMessage('JetBrains Commit Manager extension is working!');
+      vscode.window.showInformationMessage('GIT Manager for VS Code extension is working!');
     }),
 
     // Command to clear persisted state (useful for fixing corrupted state)
