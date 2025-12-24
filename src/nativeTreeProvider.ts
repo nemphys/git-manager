@@ -7,7 +7,8 @@ export class ChangelistTreeItem extends vscode.TreeItem {
   constructor(public readonly changelist: Changelist, public readonly collapsibleState: vscode.TreeItemCollapsibleState, public readonly isActive: boolean = false, public readonly colorIndex?: number) {
     super(changelist.name, collapsibleState);
     this.tooltip = changelist.description || changelist.name;
-    this.description = `${changelist.files.length} files`;
+    // Show file count, or nothing if empty
+    this.description = changelist.files.length > 0 ? `${changelist.files.length} files` : '';
     // Distinguish empty vs non-empty changelists for context menus
     // Also distinguish active vs non-active for context menus
     if (changelist.isDefault) {
