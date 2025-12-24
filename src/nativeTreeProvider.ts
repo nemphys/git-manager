@@ -657,13 +657,24 @@ export class NativeTreeProvider
             for (const changelistId of changelistIds) {
               const targetChangelist = this.changelists.find((c) => c.id === changelistId);
               if (targetChangelist) {
+                // Add hunks belonging to this changelist
+                const changelistHunks = hunks.filter(h => h.changelistId === changelistId);
+                
                 // Create a copy of the file for this changelist
                 const fileCopy = { ...file };
                 fileCopy.changelistId = changelistId;
-                targetChangelist.files.push(fileCopy);
                 
-                // Add hunks belonging to this changelist
-                const changelistHunks = hunks.filter(h => h.changelistId === changelistId);
+                // Set isStaged based on whether any hunks in this changelist are staged
+                // If the changelist has hunks, check if any are staged
+                // If no hunks, fall back to file-level isStaged
+                if (changelistHunks.length > 0) {
+                  fileCopy.isStaged = changelistHunks.some(h => h.isStaged);
+                } else {
+                  // No hunks in this changelist, use file-level isStaged
+                  fileCopy.isStaged = file.isStaged;
+                }
+                
+                targetChangelist.files.push(fileCopy);
                 targetChangelist.hunks.push(...changelistHunks);
               }
             }
@@ -1110,6 +1121,17 @@ export class NativeTreeProvider
           if (!fileExistsInTarget) {
             const fileCopy = { ...file };
             fileCopy.changelistId = targetChangelistId;
+            
+            // Set isStaged based on whether any hunks in the target changelist are staged
+            // Get all hunks of this file that belong to the target changelist
+            const targetChangelistHunks = file.hunks?.filter(h => h.changelistId === targetChangelistId) || [];
+            if (targetChangelistHunks.length > 0) {
+              fileCopy.isStaged = targetChangelistHunks.some(h => h.isStaged);
+            } else {
+              // No hunks in target changelist, use file-level isStaged
+              fileCopy.isStaged = file.isStaged;
+            }
+            
             targetChangelist.files.push(fileCopy);
           }
         } else {
